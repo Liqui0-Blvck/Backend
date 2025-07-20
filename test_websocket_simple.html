@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prueba WebSocket FruitPOS</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        #messages {
+            border: 1px solid #ccc;
+            padding: 10px;
+            height: 300px;
+            overflow-y: auto;
+            margin-bottom: 10px;
+            background-color: #f9f9f9;
+        }
+        .success {
+            color: green;
+        }
+        .error {
+            color: red;
+        }
+        .info {
+            color: blue;
+        }
+        input, button {
+            padding: 8px;
+            margin: 5px 0;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Prueba de WebSocket para FruitPOS</h1>
+    
+    <div class="controls">
+        <div>
+            <label for="business">ID de Negocio:</label>
+            <input type="text" id="business" value="1">
+        </div>
+        <div>
+            <label for="port">Puerto:</label>
+            <input type="text" id="port" value="8001">
+        </div>
+        <div>
+            <button onclick="connect()">Conectar</button>
+            <button onclick="disconnect()">Desconectar</button>
+        </div>
+    </div>
+    
+    <div id="messages"></div>
+    
+    <div>
+        <button onclick="sendPing()">Enviar Ping</button>
+    </div>
+    
+    <script>
+        let socket = null;
+        
+        function addMessage(message, type = 'info') {
+            const messagesDiv = document.getElementById('messages');
+            const messageElement = document.createElement('div');
+            messageElement.classList.add(type);
+            messageElement.textContent = `${new Date().toLocaleTimeString()}: ${message}`;
+            messagesDiv.appendChild(messageElement);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+        
+        function connect() {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                addMessage('Ya hay una conexión activa', 'error');
+                return;
+            }
+            
+            const business = document.getElementById('business').value;
+            const port = document.getElementById('port').value;
+            
+            // Usar el hostname actual para la conexión
+            const wsUrl = `ws://${window.location.hostname}:${port}/ws/notifications/${business}/`;
+            addMessage(`Intentando conectar a ${wsUrl}`, 'info');
+            
+            try {
+                socket = new WebSocket(wsUrl);
+                
+                socket.onopen = function(e) {
+                    addMessage('Conexión establecida', 'success');
+                };
+                
+                socket.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        addMessage(`Mensaje recibido: ${JSON.stringify(data)}`, 'success');
+                    } catch (e) {
+                        addMessage(`Mensaje recibido (no JSON): ${event.data}`, 'info');
+                    }
+                };
+                
+                socket.onclose = function(event) {
+                    if (event.wasClean) {
+                        addMessage(`Conexión cerrada limpiamente, código=${event.code} razón=${event.reason}`);
+                    } else {
+                        addMessage('Conexión interrumpida', 'error');
+                    }
+                    socket = null;
+                };
+                
+                socket.onerror = function(error) {
+                    addMessage(`Error: ${error.message}`, 'error');
+                };
+            } catch (e) {
+                addMessage(`Error al crear WebSocket: ${e.message}`, 'error');
+            }
+        }
+        
+        function disconnect() {
+            if (socket) {
+                socket.close();
+                addMessage('Desconectando...', 'info');
+            } else {
+                addMessage('No hay conexión activa', 'error');
+            }
+        }
+        
+        function sendPing() {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                const pingMessage = {
+                    type: 'ping',
+                    timestamp: new Date().getTime()
+                };
+                socket.send(JSON.stringify(pingMessage));
+                addMessage('Ping enviado', 'info');
+            } else {
+                addMessage('No hay conexión activa para enviar ping', 'error');
+            }
+        }
+    </script>
+</body>
+</html>
