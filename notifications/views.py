@@ -1,4 +1,5 @@
 from django.utils import timezone
+from django.db.models import Q
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -16,32 +17,56 @@ class NotificationViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         """
-        Filtra las notificaciones según el rol del usuario:
-        - Administradores/Supervisores: Ven todas las notificaciones de su negocio, 
-          excluyendo las que ellos mismos emiten.
-        - Vendedores: Ven solo sus propias notificaciones.
+        Filtra las notificaciones según el rol del usuario.
+        - Administradores/Supervisores: Ven todas las notificaciones de su negocio.
+        - Otros roles: Ven solo las notificaciones que les son asignadas directamente.
         """
         user = self.request.user
+        
+        # Determinar el negocio del usuario, incluso si no tiene perfil (caso admin)
+        business = None
+        if hasattr(user, 'perfil') and user.perfil.business:
+            business = user.perfil.business
+        elif user.groups.filter(name='administrador').exists() and Business.objects.exists():
+            business = Business.objects.first()
 
-        if not hasattr(user, 'perfil') or not user.perfil.business:
-            # Si el usuario no tiene perfil o negocio, solo puede ver sus propias notificaciones.
+        # Si no se puede determinar un negocio, devolver solo notificaciones personales
+        if not business:
             return Notification.objects.filter(usuario=user).distinct()
 
-        business = user.perfil.business
-        is_admin = user.groups.filter(name='administrador').exists()
-        is_supervisor = user.groups.filter(name='supervisor').exists()
-
-        if is_admin or is_supervisor:
-            # Obtiene todos los usuarios que pertenecen al mismo negocio.
-            usuarios_del_negocio = CustomUser.objects.filter(perfil__business=business)
-            # Filtra las notificaciones cuyo destinatario está en esa lista,
-            # excluyendo las que el propio admin/supervisor emitió.
+        # Si el usuario es admin o supervisor, muestra todas las notificaciones del negocio
+        if user.groups.filter(name__in=['administrador', 'supervisor']).exists() or user.is_superuser:
             return Notification.objects.filter(
-                usuario__in=usuarios_del_negocio
-            ).exclude(emisor=user).distinct()
+                Q(emisor__perfil__business=business) | Q(usuario__perfil__business=business)
+            ).distinct()
         else:
-            # El resto de roles (ej. vendedor) solo ven sus propias notificaciones.
+            # Otros roles solo ven las notificaciones dirigidas a ellos
             return Notification.objects.filter(usuario=user).distinct()
+        
+        # if user.groups.filter(name__in=['administrador', 'supervisor']).exists():
+        #     # Los administradores y supervisores ven las notificaciones emitidas en su negocio
+        #     # O las notificaciones que les son asignadas directamente a ellos.
+        #     return Notification.objects.filter(
+        #         Q(emisor__perfil__business=business) | Q(usuario=user)
+        #     ).distinct()
+        # else:
+        #     # El resto de roles (ej. vendedor) solo ven sus propias notificaciones directas.
+        #     return Notification.objects.filter(usuario=user).distinct()
+        # is_admin = user.groups.filter(name='administrador').exists()
+        # is_supervisor = user.groups.filter(name='supervisor').exists()
+
+        # if is_admin or is_supervisor:
+        #     # Obtiene todos los usuarios que pertenecen al mismo negocio.
+        #     usuarios_del_negocio = CustomUser.objects.filter(perfil__business=business)
+        #     # Filtra las notificaciones cuyo EMISOR pertenece al negocio.
+        #     # Esto asegura que el admin/supervisor vea toda la actividad de su negocio.
+        #     # El frontend se encargará de filtrar las que no quiera mostrar (ej. las propias).
+        #     return Notification.objects.filter(
+        #         emisor__perfil__business=business
+        #     ).distinct()
+        # else:
+        #     # El resto de roles (ej. vendedor) solo ven sus propias notificaciones.
+        #     return Notification.objects.filter(usuario=user).distinct()
 
     @action(detail=False, methods=['post'], url_path='mark-all-as-read')
     def mark_all_as_read(self, request):
