@@ -59,7 +59,7 @@ class FruitLotSerializer(serializers.ModelSerializer):
             'uid', 'producto', 'marca', 'proveedor', 'procedencia', 'pais', 'calibre', 'box_type', 'pallet_type',
             'cantidad_cajas', 'peso_bruto', 'peso_neto', 'qr_code', 'business', 'fecha_ingreso',
             'estado_maduracion', 'fecha_maduracion', 'porcentaje_perdida_estimado', 'costo_inicial',
-            'costo_diario_almacenaje', 'estado_lote',
+            'costo_diario_almacenaje', 'estado_lote', 'precio_sugerido_min', 'precio_sugerido_max',
             'producto_nombre', 'box_type_nombre', 'pallet_type_nombre', 'costo_actual',
             'peso_reservado', 'peso_disponible', 'tipo_producto', 'dias_desde_ingreso', 'dias_en_bodega',
             'porcentaje_perdida', 'perdida_estimada', 'valor_perdida', 'precio_recomendado_kg',

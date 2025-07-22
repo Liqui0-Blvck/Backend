@@ -64,6 +64,9 @@ class FruitLot(BaseModel):
     porcentaje_perdida_estimado = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     costo_inicial = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     costo_diario_almacenaje = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    # Campos para rango de precios sugeridos
+    precio_sugerido_min = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True, help_text="Precio mínimo sugerido por kg")
+    precio_sugerido_max = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True, help_text="Precio máximo sugerido por kg")
     # costo_actualizado se calcula sobre la marcha
     estado_lote = models.CharField(
         max_length=20, 
@@ -81,6 +84,15 @@ class FruitLot(BaseModel):
         from datetime import date
         dias = (date.today() - self.fecha_ingreso).days
         return self.costo_inicial + (self.costo_diario_almacenaje * dias)
+        
+    def peso_disponible(self):
+        """Calcula el peso disponible del lote (peso neto - peso reservado)"""
+        from django.db.models import Sum
+        # Evitar importación circular usando el modelo directamente
+        neto = float(self.peso_neto or 0)
+        # Usamos el modelo desde el mismo app sin importarlo
+        reservado = self.__class__._meta.apps.get_model('inventory', 'StockReservation').objects.filter(lote=self).aggregate(total=Sum('cantidad_kg'))['total'] or 0
+        return neto - float(reservado) if neto > float(reservado) else 0
 
     def save(self, *args, **kwargs):
         from django.core.exceptions import ValidationError

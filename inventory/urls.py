@@ -2,6 +2,7 @@ from django.urls import path
 from rest_framework.routers import DefaultRouter
 from .views import BoxTypeViewSet, FruitLotViewSet, StockReservationViewSet, ProductViewSet, GoodsReceptionViewSet, SupplierViewSet, ReceptionDetailViewSet
 from .maduracion_views import MaduracionPaltasView
+from .views_detail import FruitLotDetailViewSet
 
 router = DefaultRouter()
 router.register(r'boxtypes', BoxTypeViewSet, basename='boxtype')
@@ -12,7 +13,13 @@ router.register(r'goodsreceptions', GoodsReceptionViewSet, basename='goodsrecept
 router.register(r'suppliers', SupplierViewSet, basename='supplier')
 router.register(r'receptiondetails', ReceptionDetailViewSet, basename='receptiondetail')
 
+# Crear instancia del ViewSet para el detalle de lote
+fruitlot_detail = FruitLotDetailViewSet.as_view({
+    'get': 'get_detail',
+})
+
 # Combinar las URLs del router con las URLs basadas en clases
 urlpatterns = router.urls + [
     path('maduracion-paltas/', MaduracionPaltasView.as_view(), name='maduracion-paltas'),
+    path('fruits/detalle/<str:uid>/', fruitlot_detail, name='fruitlot-detail'),
 ]
