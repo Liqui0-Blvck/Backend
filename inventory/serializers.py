@@ -277,11 +277,17 @@ class StockReservationSerializer(serializers.ModelSerializer):
 class ReceptionDetailSerializer(serializers.ModelSerializer):
     recepcion = serializers.SlugRelatedField(queryset=GoodsReception.objects.all(), slug_field='uid')
     producto = serializers.SlugRelatedField(queryset=Product.objects.all(), slug_field='uid')
+    producto_nombre = serializers.SerializerMethodField()
     box_type = serializers.SlugRelatedField(queryset=BoxType.objects.all(), slug_field='uid', required=False, allow_null=True)
+    def get_producto_nombre(self, obj):
+        if obj.producto:
+            return obj.producto.nombre
+        return None
+        
     class Meta:
         model = ReceptionDetail
         fields = (
-            'uid', 'recepcion', 'producto', 'variedad', 'calibre', 'box_type', 'numero_pallet', 'cantidad_cajas', 'peso_bruto',
+            'uid', 'recepcion', 'producto', 'producto_nombre', 'variedad', 'calibre', 'box_type', 'numero_pallet', 'cantidad_cajas', 'peso_bruto',
             'peso_tara', 'calidad', 'temperatura', 'estado_maduracion', 'observaciones', 'lote_creado',
             'costo', 'porcentaje_perdida_estimado',
         )
@@ -299,6 +305,8 @@ class SupplierRelatedField(serializers.PrimaryKeyRelatedField):
 class GoodsReceptionSerializer(serializers.ModelSerializer):
     proveedor = SupplierRelatedField(queryset=Supplier.objects.all())
     detalles = ReceptionDetailSerializer(many=True, required=False)
+    recibido_por_nombre = serializers.SerializerMethodField()
+    revisado_por_nombre = serializers.SerializerMethodField()
 
     def to_internal_value(self, data):
         import json
@@ -314,9 +322,19 @@ class GoodsReceptionSerializer(serializers.ModelSerializer):
         model = GoodsReception
         fields = (
             'uid', 'numero_guia', 'fecha_recepcion', 'proveedor', 'numero_guia_proveedor', 'recibido_por',
-            'revisado_por', 'estado', 'observaciones', 'total_pallets', 'total_cajas', 'total_peso_bruto',
-            'business', 'detalles',
+            'revisado_por', 'recibido_por_nombre', 'revisado_por_nombre', 'estado', 'observaciones', 
+            'total_pallets', 'total_cajas', 'total_peso_bruto', 'business', 'detalles',
         )
+        
+    def get_recibido_por_nombre(self, obj):
+        if obj.recibido_por:
+            return f"{obj.recibido_por.first_name} {obj.recibido_por.last_name}".strip()
+        return None
+        
+    def get_revisado_por_nombre(self, obj):
+        if obj.revisado_por:
+            return f"{obj.revisado_por.first_name} {obj.revisado_por.last_name}".strip()
+        return None
 
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles', [])

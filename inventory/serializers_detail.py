@@ -91,6 +91,10 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
     ingreso_estimado = serializers.SerializerMethodField()
     ganancia_total = serializers.SerializerMethodField()
     
+    # Valores de llegada y comparación
+    valores_llegada = serializers.SerializerMethodField()
+    comparacion_venta = serializers.SerializerMethodField()
+    
     # Recomendaciones del sistema
     urgencia_venta = serializers.SerializerMethodField()
     recomendacion = serializers.SerializerMethodField()
@@ -114,6 +118,7 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
             'precio_sugerido_min', 'precio_sugerido_max',
             'dias_desde_ingreso', 'dias_en_bodega', 'porcentaje_perdida', 
             'perdida_estimada', 'valor_perdida', 'ingreso_estimado', 'ganancia_total',
+            'valores_llegada', 'comparacion_venta',
             'urgencia_venta', 'recomendacion',
             'movimientos', 'historial_precios',
         )
@@ -333,6 +338,7 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
                 'id': i + 1,
                 'fecha': venta.created_at.isoformat() if hasattr(venta.created_at, 'isoformat') else str(venta.created_at),
                 'precio': float(venta.precio_kg),
+                'peso_vendido': float(venta.peso_vendido),
                 'usuario': f"{venta.vendedor.first_name} {venta.vendedor.last_name}".strip() if hasattr(venta, 'vendedor') and venta.vendedor else "Sistema",
                 'notas': f"Venta #{venta.id} - {venta.cliente.nombre if venta.cliente else getattr(venta, 'nombre_cliente', 'Cliente no especificado')}"
             })
@@ -348,3 +354,158 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
             })
         
         return historial
+        
+    def get_valores_llegada(self, obj):
+        """
+        Obtiene los valores iniciales del pallet al momento de su llegada desde el historial.
+        """
+        # Obtener el primer registro histórico (el más antiguo)
+        historicos = obj.history.all().order_by('history_date')
+        primer_registro = historicos.first() if historicos.exists() else None
+        
+        if primer_registro:
+            # Usar valores del primer registro histórico
+            return {
+                'fecha_ingreso': primer_registro.fecha_ingreso.isoformat() if hasattr(primer_registro.fecha_ingreso, 'isoformat') else str(primer_registro.fecha_ingreso),
+                'peso_bruto_inicial': float(primer_registro.peso_bruto if primer_registro.peso_bruto else 0),
+                'peso_neto_inicial': float(primer_registro.peso_neto if primer_registro.peso_neto else 0),
+                'cantidad_cajas_inicial': primer_registro.cantidad_cajas,
+                'costo_inicial': float(primer_registro.costo_inicial if primer_registro.costo_inicial else 0),
+                'costo_por_kg_inicial': round(float(primer_registro.costo_inicial) / float(primer_registro.peso_neto), 2) 
+                                        if primer_registro.peso_neto and float(primer_registro.peso_neto) > 0 else 0,
+                'precio_sugerido_min': float(primer_registro.precio_sugerido_min) if primer_registro.precio_sugerido_min else None,
+                'precio_sugerido_max': float(primer_registro.precio_sugerido_max) if primer_registro.precio_sugerido_max else None
+            }
+        else:
+            # Fallback a los valores actuales si no hay historial
+            return {
+                'fecha_ingreso': obj.fecha_ingreso.isoformat() if hasattr(obj.fecha_ingreso, 'isoformat') else str(obj.fecha_ingreso),
+                'peso_bruto_inicial': float(obj.peso_bruto if obj.peso_bruto else 0),
+                'peso_neto_inicial': float(obj.peso_neto or 0),
+                'cantidad_cajas_inicial': obj.cantidad_cajas,
+                'costo_inicial': float(obj.costo_inicial if obj.costo_inicial else 0),
+                'costo_por_kg_inicial': round(float(obj.costo_inicial) / float(obj.peso_neto), 2) if obj.peso_neto and float(obj.peso_neto) > 0 else 0,
+                'precio_sugerido_min': float(obj.precio_sugerido_min) if obj.precio_sugerido_min else None,
+                'precio_sugerido_max': float(obj.precio_sugerido_max) if obj.precio_sugerido_max else None
+            }
+        
+    def get_comparacion_venta(self, obj):
+        """
+        Compara los valores iniciales del pallet con los valores de venta total.
+        """
+        # Obtener ventas para calcular totales
+        from sales.models import Sale
+        ventas = Sale.objects.filter(lote=obj)
+        
+        # Calcular totales de venta
+        peso_total_vendido = sum(float(venta.peso_vendido) for venta in ventas)
+        monto_total_ventas = sum(float(venta.peso_vendido * venta.precio_kg) for venta in ventas)
+        precio_promedio_kg = round(monto_total_ventas / peso_total_vendido, 2) if peso_total_vendido > 0 else 0
+        
+        # Calcular valores iniciales
+        peso_neto_inicial = float(obj.peso_neto or 0)
+        costo_inicial = float(obj.costo_inicial)
+        costo_por_kg = round(costo_inicial / peso_neto_inicial, 2) if peso_neto_inicial > 0 else 0
+        
+        # Calcular diferencias y porcentajes
+        diferencia_precio = precio_promedio_kg - costo_por_kg
+        porcentaje_margen = round((diferencia_precio / costo_por_kg) * 100, 2) if costo_por_kg > 0 else 0
+        porcentaje_vendido = round((peso_total_vendido / peso_neto_inicial) * 100, 2) if peso_neto_inicial > 0 else 0
+        
+        return {
+            'peso_total_vendido': peso_total_vendido,
+            'porcentaje_vendido': porcentaje_vendido,
+            'monto_total_ventas': monto_total_ventas,
+            'precio_promedio_kg': precio_promedio_kg,
+            'costo_por_kg': costo_por_kg,
+            'diferencia_precio': diferencia_precio,
+            'porcentaje_margen': porcentaje_margen,
+            'rentabilidad': 'positiva' if diferencia_precio > 0 else 'negativa' if diferencia_precio < 0 else 'neutra',
+            'precio_dentro_rango': self._precio_dentro_rango(precio_promedio_kg, obj),
+            'analisis': self._generar_analisis_venta(precio_promedio_kg, costo_por_kg, porcentaje_vendido, obj)
+        }
+        
+    def _precio_dentro_rango(self, precio_promedio, obj):
+        """
+        Determina si el precio promedio está dentro del rango sugerido.
+        """
+        min_sugerido = float(obj.precio_sugerido_min) if obj.precio_sugerido_min else None
+        max_sugerido = float(obj.precio_sugerido_max) if obj.precio_sugerido_max else None
+        
+        if min_sugerido is None or max_sugerido is None:
+            return None
+            
+        if precio_promedio < min_sugerido:
+            return 'por_debajo'
+        elif precio_promedio > max_sugerido:
+            return 'por_encima'
+        else:
+            return 'dentro_rango'
+            
+    def _generar_analisis_venta(self, precio_promedio, costo_por_kg, porcentaje_vendido, obj):
+        """
+        Genera un análisis de la venta basado en precios y porcentaje vendido.
+        """
+        min_sugerido = float(obj.precio_sugerido_min) if obj.precio_sugerido_min else None
+        max_sugerido = float(obj.precio_sugerido_max) if obj.precio_sugerido_max else None
+        
+        if porcentaje_vendido < 50:
+            estado_venta = 'parcial'
+        elif porcentaje_vendido < 90:
+            estado_venta = 'mayoritaria'
+        else:
+            estado_venta = 'completa'
+            
+        margen = precio_promedio - costo_por_kg
+        porcentaje_margen = (margen / costo_por_kg) * 100 if costo_por_kg > 0 else 0
+        
+        if porcentaje_margen < 10:
+            rendimiento = 'bajo'
+        elif porcentaje_margen < 25:
+            rendimiento = 'moderado'
+        else:
+            rendimiento = 'alto'
+            
+        # Analizar si el precio está dentro del rango sugerido
+        rango_precio = 'no_definido'
+        if min_sugerido is not None and max_sugerido is not None:
+            if precio_promedio < min_sugerido:
+                rango_precio = 'por_debajo_del_rango_sugerido'
+            elif precio_promedio > max_sugerido:
+                rango_precio = 'por_encima_del_rango_sugerido'
+            else:
+                rango_precio = 'dentro_del_rango_sugerido'
+        
+        return {
+            'estado_venta': estado_venta,
+            'rendimiento': rendimiento,
+            'rango_precio': rango_precio,
+            'recomendacion': self._generar_recomendacion(estado_venta, rendimiento, rango_precio, obj)
+        }
+        
+    def _generar_recomendacion(self, estado_venta, rendimiento, rango_precio, obj):
+        """
+        Genera una recomendación basada en el análisis de venta.
+        """
+        if estado_venta == 'completa':
+            if rendimiento == 'alto':
+                return 'Excelente resultado. Considerar mantener estrategia de precios para futuros lotes similares.'
+            elif rendimiento == 'moderado':
+                return 'Buen resultado. El lote se vendió completamente con un margen aceptable.'
+            else:
+                return 'Lote vendido completamente pero con margen bajo. Revisar estrategia de precios o costos.'
+        
+        elif estado_venta == 'mayoritaria':
+            if rango_precio == 'por_debajo_del_rango_sugerido':
+                return 'Considerar ajustar precio al alza para el stock restante, ya que hay buena demanda incluso con precios bajos.'
+            elif rango_precio == 'por_encima_del_rango_sugerido':
+                return 'Buen rendimiento con precio alto. Mantener precio para stock restante.'
+            else:
+                return 'Venta progresando bien. Mantener estrategia actual para el stock restante.'
+        
+        else:  # parcial
+            if rendimiento == 'bajo' or rango_precio == 'por_encima_del_rango_sugerido':
+                return 'Considerar reducir precio para acelerar la venta del stock restante.'
+            else:
+                return 'Revisar estrategia de ventas. El lote no está teniendo la rotación esperada.'
+

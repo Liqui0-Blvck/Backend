@@ -63,7 +63,14 @@ class FruitLotViewSet(RolePermissionMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
-        # Oculta los lotes agotados por defecto
+        # Verificar si hay un filtro específico por estado_lote
+        estado_lote = self.request.query_params.get('estado_lote', None)
+        
+        # Si se solicita específicamente un estado, aplicar ese filtro
+        if estado_lote is not None:
+            return qs.filter(estado_lote=estado_lote)
+        
+        # Si no hay filtro específico, ocultar los lotes agotados por defecto
         return qs.exclude(estado_lote='agotado')
 
     def perform_create(self, serializer):
@@ -79,6 +86,62 @@ class FruitLotViewSet(RolePermissionMixin, viewsets.ModelViewSet):
         if perfil is None:
             raise ValidationError({'detail': 'Perfil no encontrado para el usuario'})
         serializer.save(business=perfil.business)
+        
+    @action(detail=True, methods=['post'], url_path='update-suggested-prices')
+    def update_suggested_prices(self, request, uid=None):
+        """Actualiza los precios sugeridos (min/max) de un lote de fruta"""
+        from .serializers_update import FruitLotSuggestedPriceUpdateSerializer
+        
+        lote = self.get_object()
+        serializer = FruitLotSuggestedPriceUpdateSerializer(lote, data=request.data, partial=True)
+        
+        if serializer.is_valid():
+            serializer.save()
+            return Response({
+                'status': 'success',
+                'message': 'Precios sugeridos actualizados correctamente',
+                'data': serializer.data
+            }, status=status.HTTP_200_OK)
+        
+        return Response({
+            'status': 'error',
+            'message': 'Error al actualizar precios sugeridos',
+            'errors': serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['post'], url_path='update-maturation')
+    def update_maturation(self, request, uid=None):
+        """Actualiza el estado de maduración de un lote de fruta"""
+        from .serializers_update import FruitLotMaturationUpdateSerializer
+        from .models import MadurationHistory
+        
+        lote = self.get_object()
+        estado_anterior = lote.estado_maduracion
+        serializer = FruitLotMaturationUpdateSerializer(lote, data=request.data, partial=True)
+        
+        if serializer.is_valid():
+            # Guardar el lote actualizado
+            lote_actualizado = serializer.save()
+            
+            # Verificar si el estado de maduración cambió
+            if 'estado_maduracion' in request.data and lote_actualizado.estado_maduracion != estado_anterior:
+                # Registrar el cambio en el historial de maduración
+                MadurationHistory.objects.create(
+                    lote=lote_actualizado,
+                    estado_maduracion=lote_actualizado.estado_maduracion
+                )
+            
+            return Response({
+                'status': 'success',
+                'message': 'Estado de maduración actualizado correctamente',
+                'data': serializer.data
+            }, status=status.HTTP_200_OK)
+        
+        return Response({
+            'status': 'error',
+            'message': 'Error al actualizar estado de maduración',
+            'errors': serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
 
 class ProductViewSet(RolePermissionMixin, viewsets.ModelViewSet):
     serializer_class = ProductSerializer

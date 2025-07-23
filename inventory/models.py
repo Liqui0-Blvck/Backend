@@ -68,6 +68,7 @@ class FruitLot(BaseModel):
     precio_sugerido_min = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True, help_text="Precio mínimo sugerido por kg")
     precio_sugerido_max = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True, help_text="Precio máximo sugerido por kg")
     # costo_actualizado se calcula sobre la marcha
+
     estado_lote = models.CharField(
         max_length=20, 
         choices=[
