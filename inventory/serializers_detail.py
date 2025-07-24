@@ -175,6 +175,9 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
         return self.get_dias_desde_ingreso(obj)
 
     def get_porcentaje_perdida(self, obj):
+        """
+        Calcula el porcentaje de pérdida basado en el tipo de producto y estado de maduración
+        """
         tipo = self.get_tipo_producto(obj)
         estado = getattr(obj, 'estado_maduracion', 'verde')
         if tipo == 'palta':
@@ -189,10 +192,45 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
         return 0
 
     def get_perdida_estimada(self, obj):
+        """
+        Calcula la pérdida estimada basada en los valores iniciales del historial
+        """
+        try:
+            # Obtenemos el primer registro del historial
+            historial = obj.history.all().order_by('history_date')
+            if historial.exists():
+                primer_registro = historial.first()
+                peso_inicial = float(getattr(primer_registro, 'peso_neto', 0) or 0)
+                
+                # Calculamos la pérdida usando el peso inicial
+                porcentaje = self.get_porcentaje_perdida(obj)
+                return round(peso_inicial * (porcentaje/100), 2)
+        except Exception:
+            pass
+            
+        # Si no hay historial, usamos el método anterior como fallback
         neto = float(obj.peso_neto or 0)
         return round(neto * (self.get_porcentaje_perdida(obj)/100), 2)
 
     def get_valor_perdida(self, obj):
+        """
+        Calcula el valor de la pérdida basado en los valores iniciales del historial
+        """
+        try:
+            # Obtenemos el primer registro del historial
+            historial = obj.history.all().order_by('history_date')
+            if historial.exists():
+                primer_registro = historial.first()
+                
+                # Obtenemos la pérdida estimada y el costo inicial
+                perdida = self.get_perdida_estimada(obj)
+                costo_inicial = float(getattr(primer_registro, 'costo_inicial', 0) or 0)
+                
+                return round(perdida * costo_inicial, 2)
+        except Exception:
+            pass
+            
+        # Si no hay historial, usamos el método anterior como fallback
         perdida = self.get_perdida_estimada(obj)
         costo_actual = float(self.get_costo_actual(obj) or 0)
         return round(perdida * costo_actual, 2)
@@ -214,10 +252,53 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
         return 25.0
 
     def get_ingreso_estimado(self, obj):
+        """
+        Calcula el ingreso estimado basado en los valores iniciales del pallet
+        obtenidos del historial.
+        """
+        try:
+            # Obtenemos el primer registro del historial
+            historial = obj.history.all().order_by('history_date')
+            if historial.exists():
+                primer_registro = historial.first()
+                peso_inicial = float(getattr(primer_registro, 'peso_neto', 0) or 0)
+                
+                # Calculamos el precio recomendado basado en el costo inicial
+                costo_inicial = float(getattr(primer_registro, 'costo_inicial', 0) or 0)
+                precio_recomendado = round(costo_inicial * 1.3, 2)  # 30% de margen
+                
+                return round(precio_recomendado * peso_inicial, 2)
+        except Exception:
+            pass
+            
+        # Si no hay historial, usamos el método anterior como fallback
         peso_real = self.get_peso_vendible(obj)
         return round(self.get_precio_recomendado_kg(obj) * peso_real, 2)
 
     def get_ganancia_total(self, obj):
+        """
+        Calcula la ganancia total estimada basada en los valores iniciales del pallet
+        obtenidos del historial.
+        """
+        try:
+            # Obtenemos el primer registro del historial
+            historial = obj.history.all().order_by('history_date')
+            if historial.exists():
+                primer_registro = historial.first()
+                peso_inicial = float(getattr(primer_registro, 'peso_neto', 0) or 0)
+                
+                # Calculamos el costo y precio iniciales
+                costo_inicial = float(getattr(primer_registro, 'costo_inicial', 0) or 0)
+                precio_recomendado = round(costo_inicial * 1.3, 2)  # 30% de margen
+                
+                # Ganancia por kg
+                ganancia_kg = precio_recomendado - costo_inicial
+                
+                return round(ganancia_kg * peso_inicial, 2)
+        except Exception:
+            pass
+            
+        # Si no hay historial, usamos el método anterior como fallback
         peso_real = self.get_peso_vendible(obj)
         return round(self.get_ganancia_kg(obj) * peso_real, 2)
 
@@ -397,20 +478,49 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
         from sales.models import Sale
         ventas = Sale.objects.filter(lote=obj)
         
-        # Calcular totales de venta
-        peso_total_vendido = sum(float(venta.peso_vendido) for venta in ventas)
-        monto_total_ventas = sum(float(venta.peso_vendido * venta.precio_kg) for venta in ventas)
+        # Calcular totales de venta con redondeo adecuado
+        peso_total_vendido = round(sum(float(venta.peso_vendido) for venta in ventas), 2)
+        monto_total_ventas = round(sum(float(venta.peso_vendido * venta.precio_kg) for venta in ventas), 2)
         precio_promedio_kg = round(monto_total_ventas / peso_total_vendido, 2) if peso_total_vendido > 0 else 0
         
-        # Calcular valores iniciales
-        peso_neto_inicial = float(obj.peso_neto or 0)
-        costo_inicial = float(obj.costo_inicial)
+        # Obtener valores iniciales del historial
+        try:
+            historial = obj.history.all().order_by('history_date')
+            if historial.exists():
+                primer_registro = historial.first()
+                peso_neto_inicial = float(getattr(primer_registro, 'peso_neto', 0) or 0)
+                costo_inicial = float(getattr(primer_registro, 'costo_inicial', 0) or 0)
+            else:
+                # Fallback a valores actuales
+                peso_neto_inicial = float(obj.peso_neto or 0)
+                costo_inicial = float(obj.costo_inicial or 0)
+        except Exception:
+            # Fallback a valores actuales en caso de error
+            peso_neto_inicial = float(obj.peso_neto or 0)
+            costo_inicial = float(obj.costo_inicial or 0)
+        
+        # Evitar división por cero
+        if peso_neto_inicial <= 0:
+            peso_neto_inicial = 1  # Valor mínimo para evitar división por cero
+        
+        # Calcular costo por kg con validación
         costo_por_kg = round(costo_inicial / peso_neto_inicial, 2) if peso_neto_inicial > 0 else 0
         
-        # Calcular diferencias y porcentajes
-        diferencia_precio = precio_promedio_kg - costo_por_kg
-        porcentaje_margen = round((diferencia_precio / costo_por_kg) * 100, 2) if costo_por_kg > 0 else 0
-        porcentaje_vendido = round((peso_total_vendido / peso_neto_inicial) * 100, 2) if peso_neto_inicial > 0 else 0
+        # Calcular diferencias y porcentajes con límites razonables
+        diferencia_precio = round(precio_promedio_kg - costo_por_kg, 2)
+        
+        # Calcular porcentaje de margen con límites razonables
+        if costo_por_kg > 0:
+            porcentaje_margen = round((diferencia_precio / costo_por_kg) * 100, 2)
+            # Limitar a un rango razonable para presentación (-100% a 1000%)
+            porcentaje_margen = max(min(porcentaje_margen, 1000), -100)
+        else:
+            porcentaje_margen = 0
+        
+        # Calcular porcentaje vendido con límites razonables
+        porcentaje_vendido = round((peso_total_vendido / peso_neto_inicial) * 100, 2)
+        # Limitar a un máximo de 100% para presentación normal
+        porcentaje_vendido = min(porcentaje_vendido, 100)
         
         return {
             'peso_total_vendido': peso_total_vendido,
