@@ -10,6 +10,7 @@ class BoxTypeSerializer(serializers.ModelSerializer):
 
 class ProductSerializer(serializers.ModelSerializer):
     image_url = serializers.SerializerMethodField()
+    unidad = serializers.CharField(source='get_unidad_display')
     
     class Meta:
         model = Product

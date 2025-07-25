@@ -9,10 +9,16 @@ from simple_history.models import HistoricalRecords
 
 
 class Product(BaseModel):
+
+    options = [
+        ('caja', 'Caja'),
+        ('unidad', 'Unidad'),
+        ('kilogramo', 'Kilogramo'),
+    ]
     uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
     nombre = models.CharField(max_length=100)
     marca = models.CharField(max_length=50, blank=True)
-    unidad = models.CharField(max_length=20, default="caja")
+    unidad = models.CharField(max_length=20, default="caja", choices=options)
     business = models.ForeignKey('business.Business', on_delete=models.CASCADE)
     activo = models.BooleanField(default=True)
     image_path = models.ImageField(upload_to='product_images', blank=True, null=True)
