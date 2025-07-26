@@ -371,8 +371,7 @@ class SupplierViewSet(RolePermissionMixin, viewsets.ModelViewSet):
         if perfil is None:
             raise ValidationError({'detail': 'Perfil no encontrado para el usuario'})
         serializer.save(business=perfil.business)
-
-
+        
 class ReceptionDetailViewSet(RolePermissionMixin, viewsets.ModelViewSet):
     serializer_class = ReceptionDetailSerializer
     permission_classes = [IsAuthenticated, IsSameBusiness]
