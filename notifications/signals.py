@@ -26,8 +26,8 @@ def get_notification_recipients(business: Business, roles: list, exclude_user: C
     recipient_ids = set()
 
     # 1. Dueño del negocio
-    if business.owner:
-        recipient_ids.add(business.owner.id)
+    if business.dueno:
+        recipient_ids.add(business.dueno.id)
 
     # 2. Usuarios con roles específicos y perfil en el negocio
     users_with_role_and_profile = CustomUser.objects.filter(
@@ -82,7 +82,7 @@ def check_low_stock(sender, instance, created, **kwargs):
         if porcentaje_disponible <= umbral_porcentaje or peso_disponible <= umbral_absoluto:
             if not Notification.objects.filter(tipo='stock_bajo', objeto_relacionado_id=str(instance.id)).exists():
                 recipients = get_notification_recipients(instance.business, ['administrador', 'supervisor'])
-                emisor = instance.business.owner or recipients.first()
+                emisor = instance.business.dueno or recipients.first()
                 nombre_producto = instance.producto.nombre if instance.producto else "Producto desconocido"
                 for user in recipients:
                     Notification.objects.create(
@@ -104,7 +104,7 @@ def notify_important_sale(sender, instance, created, **kwargs):
                 Notification.objects.create(
                     usuario=user, emisor=instance.vendedor,
                     titulo=f"Venta importante: ${instance.total:,.0f}",
-                    mensaje=f"Venta de ${instance.total:,.0f} por {instance.vendedor.get_full_name_or_email() if instance.vendedor else 'N/A'}.",
+                    mensaje=f"Venta de ${instance.total:,.0f} por {instance.vendedor.get_full_name() if hasattr(instance.vendedor, 'get_full_name') else instance.vendedor.email if instance.vendedor else 'N/A'}.",
                     tipo="venta_importante", enlace=f"/ventas/{instance.id}/",
                     objeto_relacionado_tipo="sale", objeto_relacionado_id=str(instance.id)
                 )
@@ -120,7 +120,7 @@ def crear_notificacion_inicio_turno(sender, instance, created, **kwargs):
             Notification.objects.create(
                 usuario=user, emisor=instance.usuario_apertura,
                 titulo="Inicio de Turno",
-                mensaje=f"{instance.usuario_apertura.get_full_name_or_email()} ha iniciado turno en {instance.caja.nombre}.",
+                mensaje=f"{instance.usuario_apertura.get_full_name() if hasattr(instance.usuario_apertura, 'get_full_name') else instance.usuario_apertura.email} ha iniciado turno en {instance.caja.nombre}.",
                 tipo='turno_iniciado', objeto_relacionado_tipo='shift',
                 objeto_relacionado_id=str(instance.id)
             )

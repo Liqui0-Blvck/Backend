@@ -1,6 +1,6 @@
 from rest_framework import viewsets, status
-from .models import BoxType, FruitLot, StockReservation, Product, GoodsReception, Supplier, ReceptionDetail
-from .serializers import BoxTypeSerializer, FruitLotSerializer, StockReservationSerializer, ProductSerializer, GoodsReceptionSerializer, SupplierSerializer, ReceptionDetailSerializer
+from .models import BoxType, FruitLot, StockReservation, Product, GoodsReception, Supplier, ReceptionDetail, SupplierPayment
+from .serializers import BoxTypeSerializer, FruitLotSerializer, StockReservationSerializer, ProductSerializer, GoodsReceptionSerializer, SupplierSerializer, ReceptionDetailSerializer, SupplierPaymentSerializer
 from rest_framework.permissions import IsAuthenticated
 from core.permissions import IsSameBusiness
 from accounts.models import CustomUser
@@ -371,6 +371,31 @@ class SupplierViewSet(RolePermissionMixin, viewsets.ModelViewSet):
         if perfil is None:
             raise ValidationError({'detail': 'Perfil no encontrado para el usuario'})
         serializer.save(business=perfil.business)
+        
+    @action(detail=True, methods=['get'])
+    def transactions(self, request, uid=None):
+        """
+        Obtiene todas las recepciones de mercancÃ­a (GoodsReception) vinculadas a este proveedor
+        """
+        try:
+            # Obtener el proveedor
+            supplier = self.get_object()
+            
+            # Obtener todas las recepciones asociadas a este proveedor
+            receptions = GoodsReception.objects.filter(proveedor=supplier).order_by('-fecha_recepcion')
+            
+            # Serializar los resultados
+            serializer = GoodsReceptionSerializer(receptions, many=True)
+            
+            return Response({
+                'count': receptions.count(),
+                'results': serializer.data
+            })
+        except Exception as e:
+            return Response(
+                {'error': f'Error al obtener transacciones: {str(e)}'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class ReceptionDetailViewSet(RolePermissionMixin, viewsets.ModelViewSet):
@@ -444,6 +469,35 @@ class ReceptionDetailViewSet(RolePermissionMixin, viewsets.ModelViewSet):
         serializer.save(business=perfil.business)
         
     def perform_update(self, serializer):
+        user = self.request.user
+        perfil = getattr(user, 'perfil', None)
+        if perfil is None:
+            raise ValidationError({'detail': 'Perfil no encontrado para el usuario'})
+        serializer.save(business=perfil.business)
+
+
+class SupplierPaymentViewSet(RolePermissionMixin, viewsets.ModelViewSet):
+    serializer_class = SupplierPaymentSerializer
+    permission_classes = [IsAuthenticated, IsSameBusiness]
+    queryset = SupplierPayment.objects.all()
+    lookup_field = 'uid'
+    
+    def get_queryset(self):
+        qs = super().get_queryset()
+        
+        # Filtrar por recepción si se proporciona el parámetro
+        recepcion_uid = self.request.query_params.get('recepcion', None)
+        if recepcion_uid:
+            qs = qs.filter(recepcion__uid=recepcion_uid)
+        
+        # Filtrar por proveedor si se proporciona el parámetro
+        proveedor_uid = self.request.query_params.get('proveedor', None)
+        if proveedor_uid:
+            qs = qs.filter(recepcion__proveedor__uid=proveedor_uid)
+            
+        return qs
+    
+    def perform_create(self, serializer):
         user = self.request.user
         perfil = getattr(user, 'perfil', None)
         if perfil is None:

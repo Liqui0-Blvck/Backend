@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import BoxType, FruitLot, StockReservation, Product, GoodsReception, Supplier, ReceptionDetail
+from .models import BoxType, FruitLot, StockReservation, Product, GoodsReception, Supplier, ReceptionDetail, SupplierPayment
 from sales.models import Customer
 from django.db.models import Sum
 
@@ -357,6 +357,86 @@ class GoodsReceptionSerializer(serializers.ModelSerializer):
         return instance
 
 class SupplierSerializer(serializers.ModelSerializer):
+    total_deuda = serializers.SerializerMethodField()
+    total_pagado = serializers.SerializerMethodField()
+    recepciones_pendientes = serializers.SerializerMethodField()
+    
     class Meta:
         model = Supplier
-        fields = ('uid', 'nombre', 'rut', 'direccion', 'telefono', 'email', 'contacto', 'observaciones', 'business')
+        fields = ('uid', 'nombre', 'rut', 'direccion', 'telefono', 'email', 'contacto', 'observaciones', 
+                 'business', 'activo', 'total_deuda', 'total_pagado', 'recepciones_pendientes')
+    
+    def get_total_deuda(self, obj):
+        # Calcular el total de deuda sumando los montos totales de todas las recepciones
+        total = obj.recepciones.aggregate(total=Sum('monto_total'))['total'] or 0
+        
+        # Restar los pagos realizados
+        pagos = SupplierPayment.objects.filter(recepcion__proveedor=obj)
+        total_pagado = pagos.aggregate(total=Sum('monto'))['total'] or 0
+        
+        return total - total_pagado
+    
+    def get_total_pagado(self, obj):
+        # Sumar todos los pagos realizados al proveedor
+        pagos = SupplierPayment.objects.filter(recepcion__proveedor=obj)
+        return pagos.aggregate(total=Sum('monto'))['total'] or 0
+    
+    def get_recepciones_pendientes(self, obj):
+        # Obtener todas las recepciones del proveedor
+        recepciones = obj.recepciones.all()
+        
+        # Preparar datos de recepciones con información de pagos
+        resultado = []
+        
+        for recepcion in recepciones:
+            # Calcular total pagado para esta recepción
+            pagos = SupplierPayment.objects.filter(recepcion=recepcion)
+            total_pagado = pagos.aggregate(total=Sum('monto'))['total'] or 0
+            
+            # Determinar estado de pago
+            if total_pagado >= recepcion.monto_total:
+                estado_pago = 'pagado'
+            elif total_pagado > 0:
+                estado_pago = 'parcial'
+            else:
+                estado_pago = 'pendiente'
+            
+            # Añadir datos de la recepción
+            resultado.append({
+                'uid': str(recepcion.uid),
+                'numero_guia': recepcion.numero_guia,
+                'fecha_recepcion': recepcion.fecha_recepcion,
+                'monto_total': float(recepcion.monto_total),
+                'monto_pagado': float(total_pagado),
+                'estado_pago': estado_pago,
+                'pagos': [{
+                    'uid': str(pago.uid),
+                    'monto': float(pago.monto),
+                    'fecha_pago': pago.fecha_pago,
+                    'metodo_pago': pago.metodo_pago,
+                    'metodo_pago_display': pago.get_metodo_pago_display(),
+                    'notas': pago.notas
+                } for pago in pagos]
+            })
+        
+        return resultado
+
+
+class SupplierPaymentSerializer(serializers.ModelSerializer):
+    metodo_pago_display = serializers.CharField(source='get_metodo_pago_display', read_only=True)
+    recepcion_numero = serializers.SerializerMethodField()
+    proveedor_nombre = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = SupplierPayment
+        fields = [
+            'uid', 'recepcion', 'recepcion_numero', 'monto', 'fecha_pago',
+            'metodo_pago', 'metodo_pago_display', 'comprobante', 'notas',
+            'proveedor_nombre', 'created_at', 'updated_at'
+        ]
+    
+    def get_recepcion_numero(self, obj):
+        return obj.recepcion.numero_guia if obj.recepcion else None
+    
+    def get_proveedor_nombre(self, obj):
+        return obj.recepcion.proveedor.nombre if obj.recepcion and obj.recepcion.proveedor else None

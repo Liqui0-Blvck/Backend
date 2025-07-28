@@ -1,6 +1,6 @@
 from django.urls import path
 from rest_framework.routers import DefaultRouter
-from .views import BoxTypeViewSet, FruitLotViewSet, StockReservationViewSet, ProductViewSet, GoodsReceptionViewSet, SupplierViewSet, ReceptionDetailViewSet
+from .views import BoxTypeViewSet, FruitLotViewSet, StockReservationViewSet, ProductViewSet, GoodsReceptionViewSet, SupplierViewSet, ReceptionDetailViewSet, SupplierPaymentViewSet
 from .maduracion_views import MaduracionPaltasView
 from .views_detail import FruitLotDetailViewSet
 from .product_views import ProductMovementViewSet
@@ -14,6 +14,7 @@ router.register(r'product-movements', ProductMovementViewSet, basename='product-
 router.register(r'goodsreceptions', GoodsReceptionViewSet, basename='goodsreception')
 router.register(r'suppliers', SupplierViewSet, basename='supplier')
 router.register(r'receptiondetails', ReceptionDetailViewSet, basename='receptiondetail')
+router.register(r'supplier-payments', SupplierPaymentViewSet, basename='supplierpayment')
 
 # Crear instancia del ViewSet para el detalle de lote
 fruitlot_detail = FruitLotDetailViewSet.as_view({
