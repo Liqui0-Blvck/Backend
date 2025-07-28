@@ -523,8 +523,8 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
         porcentaje_vendido = min(porcentaje_vendido, 100)
         
         # Calcular ganancia total de ventas reales (monto total de ventas - costo total del pallet)
-        costo_total_pallet = round(obj.costo_actualizado() * obj.peso_neto, 2)  # Costo total inicial del pallet
-        ganancia_total_ventas = round(monto_total_ventas - costo_total_pallet, 2)
+        costo_total_pallet = float(round(obj.costo_actualizado() * obj.peso_neto, 2))  # Costo total inicial del pallet
+        ganancia_total_ventas = round(float(monto_total_ventas) - costo_total_pallet, 2)
         
         return {
             'peso_total_vendido': peso_total_vendido,

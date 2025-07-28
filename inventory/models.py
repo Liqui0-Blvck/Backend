@@ -41,7 +41,7 @@ class BoxType(models.Model):
     nombre = models.CharField(max_length=64)
     descripcion = models.TextField(blank=True)
     peso_caja = models.DecimalField(max_digits=6, decimal_places=2)
-    peso_pallet = models.DecimalField(max_digits=7, decimal_places=2)
+    peso_pallet = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True)
     business = models.ForeignKey('business.Business', on_delete=models.CASCADE)
 
     def __str__(self):

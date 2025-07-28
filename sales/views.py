@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 class CustomerViewSet(viewsets.ModelViewSet):
     serializer_class = CustomerSerializer
     permission_classes = [IsAuthenticated, IsSameBusiness]
+    lookup_field = 'uid'
     queryset = Customer.objects.all()
 
     def get_queryset(self):
@@ -117,6 +118,19 @@ class SalePendingViewSet(viewsets.ModelViewSet):
         )
 
 
+class CustomerViewSet(viewsets.ModelViewSet):
+    serializer_class = CustomerSerializer
+    permission_classes = [IsAuthenticated, IsSameBusiness]
+    lookup_field = 'uid'
+    
+    def get_queryset(self):
+        user = self.request.user
+        perfil = getattr(user, 'perfil', None)
+        if perfil is None:
+            return Customer.objects.none()
+        return Customer.objects.filter(business=perfil.business)
+
+
 class SaleViewSet(viewsets.ModelViewSet):
     serializer_class = SaleSerializer
     permission_classes = [IsAuthenticated, IsSameBusiness]
@@ -131,7 +145,6 @@ class SaleViewSet(viewsets.ModelViewSet):
             
         # Filtrado base por negocio - siempre traemos todos los clientes del negocio
         queryset = Customer.objects.filter(business=perfil.business)
-        
         
         serializer = CustomerSerializer(queryset, many=True)
         return Response(serializer.data)

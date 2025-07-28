@@ -26,8 +26,8 @@ def get_notification_recipients(business: Business, roles: list, exclude_user: C
     recipient_ids = set()
 
     # 1. Dueño del negocio
-    if business.dueno:
-        recipient_ids.add(business.dueno.id)
+    if business.owner:
+        recipient_ids.add(business.owner.id)
 
     # 2. Usuarios con roles específicos y perfil en el negocio
     users_with_role_and_profile = CustomUser.objects.filter(
@@ -82,13 +82,13 @@ def check_low_stock(sender, instance, created, **kwargs):
         if porcentaje_disponible <= umbral_porcentaje or peso_disponible <= umbral_absoluto:
             if not Notification.objects.filter(tipo='stock_bajo', objeto_relacionado_id=str(instance.id)).exists():
                 recipients = get_notification_recipients(instance.business, ['administrador', 'supervisor'])
-                emisor = instance.business.dueno or recipients.first()
+                emisor = instance.business.owner or recipients.first()
                 nombre_producto = instance.producto.nombre if instance.producto else "Producto desconocido"
                 for user in recipients:
                     Notification.objects.create(
                         usuario=user, emisor=emisor,
                         titulo=f"Stock bajo: {nombre_producto}",
-                        mensaje=f"El lote {instance.codigo} tiene poco stock. Quedan {peso_disponible:.2f} kg.",
+                        mensaje=f"El lote {instance.qr_code} tiene poco stock. Quedan {peso_disponible:.2f} kg.",
                         tipo="stock_bajo", enlace=f"/inventario/lotes/{instance.id}/",
                         objeto_relacionado_tipo="fruitlot", objeto_relacionado_id=str(instance.id)
                     )

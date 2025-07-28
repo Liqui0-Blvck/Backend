@@ -485,12 +485,12 @@ class SupplierPaymentViewSet(RolePermissionMixin, viewsets.ModelViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
         
-        # Filtrar por recepción si se proporciona el parámetro
+        # Filtrar por recepciï¿½n si se proporciona el parï¿½metro
         recepcion_uid = self.request.query_params.get('recepcion', None)
         if recepcion_uid:
             qs = qs.filter(recepcion__uid=recepcion_uid)
         
-        # Filtrar por proveedor si se proporciona el parámetro
+        # Filtrar por proveedor si se proporciona el parï¿½metro
         proveedor_uid = self.request.query_params.get('proveedor', None)
         if proveedor_uid:
             qs = qs.filter(recepcion__proveedor__uid=proveedor_uid)

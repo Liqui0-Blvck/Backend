@@ -6,9 +6,11 @@ from simple_history.models import HistoricalRecords
 # No importar modelos de otras apps arriba para evitar ciclos
 
 class Customer(BaseModel):
+    uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
     nombre = models.CharField(max_length=100)
     rut = models.CharField(max_length=20, unique=True)
     telefono = models.CharField(max_length=20, blank=True, null=True)
+    whatsapp = models.CharField(max_length=20, blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
     direccion = models.CharField(max_length=200, blank=True, null=True)
     observaciones = models.TextField(blank=True, null=True)
