@@ -26,8 +26,8 @@ def get_notification_recipients(business: Business, roles: list, exclude_user: C
     recipient_ids = set()
 
     # 1. Dueño del negocio
-    if business.owner:
-        recipient_ids.add(business.owner.id)
+    if business.dueno:
+        recipient_ids.add(business.dueno.id)
 
     # 2. Usuarios con roles específicos y perfil en el negocio
     users_with_role_and_profile = CustomUser.objects.filter(
@@ -82,7 +82,7 @@ def check_low_stock(sender, instance, created, **kwargs):
         if porcentaje_disponible <= umbral_porcentaje or peso_disponible <= umbral_absoluto:
             if not Notification.objects.filter(tipo='stock_bajo', objeto_relacionado_id=str(instance.id)).exists():
                 recipients = get_notification_recipients(instance.business, ['administrador', 'supervisor'])
-                emisor = instance.business.owner or recipients.first()
+                emisor = instance.business.dueno or recipients.first()
                 nombre_producto = instance.producto.nombre if instance.producto else "Producto desconocido"
                 for user in recipients:
                     Notification.objects.create(
