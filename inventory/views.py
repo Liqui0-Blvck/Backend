@@ -68,10 +68,15 @@ class FruitLotViewSet(RolePermissionMixin, viewsets.ModelViewSet):
         
         # Si se solicita específicamente un estado, aplicar ese filtro
         if estado_lote is not None:
-            return qs.filter(estado_lote=estado_lote)
+            qs = qs.filter(estado_lote=estado_lote)
+        else:
+            # Si no hay filtro específico, ocultar los lotes agotados por defecto
+            qs = qs.exclude(estado_lote='agotado')
         
-        # Si no hay filtro específico, ocultar los lotes agotados por defecto
-        return qs.exclude(estado_lote='agotado')
+        # Excluir lotes que tienen ventas pendientes asociadas
+        from sales.models import SalePending
+        lotes_con_ventas_pendientes = SalePending.objects.filter(estado='pendiente').values_list('lote', flat=True)
+        return qs.exclude(id__in=lotes_con_ventas_pendientes)
 
     def perform_create(self, serializer):
         user = self.request.user

@@ -200,21 +200,34 @@ class Sale(BaseModel):
         return f"Venta {self.codigo_venta or self.id} - Lote {self.lote_id} - Cliente: {self.cliente.nombre if self.cliente else 'Ocasional'}"
 
 class SalePending(BaseModel):
+    uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
+    
     ESTADO_CHOICES = [
         ("pendiente", "Pendiente"),
         ("confirmada", "Confirmada"),
         ("cancelada", "Cancelada"),
         ("expirada", "Expirada"),
     ]
+    # Campos básicos de la venta pendiente
     lote = models.ForeignKey('inventory.FruitLot', on_delete=models.CASCADE)
     cliente = models.ForeignKey(Customer, on_delete=models.SET_NULL, null=True, blank=True)
     cantidad_kg = models.DecimalField(max_digits=7, decimal_places=2)
     cantidad_cajas = models.PositiveIntegerField(default=0)
+    
     # Datos básicos del cliente ocasional
     nombre_cliente = models.CharField(max_length=100, blank=True, null=True)
     rut_cliente = models.CharField(max_length=20, blank=True, null=True)
     telefono_cliente = models.CharField(max_length=20, blank=True, null=True)
     email_cliente = models.EmailField(blank=True, null=True)
+    
+    # Campos adicionales para facilitar la conversión a venta confirmada
+    precio_kg = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    total = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    metodo_pago = models.CharField(max_length=20, choices=Sale.METODO_PAGO_CHOICES, blank=True, null=True)
+    comprobante = models.CharField(max_length=100, blank=True, null=True)
+    fecha_vencimiento = models.DateField(null=True, blank=True)
+    
+    # Campos de control
     vendedor = models.ForeignKey('accounts.CustomUser', on_delete=models.SET_NULL, blank=True, null=True)
     estado = models.CharField(max_length=16, choices=ESTADO_CHOICES, default="pendiente")
     comentarios = models.TextField(blank=True)

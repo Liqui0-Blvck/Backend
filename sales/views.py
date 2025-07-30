@@ -37,6 +37,7 @@ class SalePendingViewSet(viewsets.ModelViewSet):
     queryset = SalePending.objects.all()
     serializer_class = SalePendingSerializer
     permission_classes = [IsAuthenticated]
+    http_method_names = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']
 
     def get_queryset(self):
         user = self.request.user
@@ -85,35 +86,88 @@ class SalePendingViewSet(viewsets.ModelViewSet):
         # Crear SalePending y StockReservation a la vez (campos coherentes)
         data = self.request.data
         lote_uid = data.get('lote')
-        cliente_id = data.get('cliente')
-        cantidad_kg = float(data.get('cantidad_kg', 0))
-        cantidad_cajas = int(data.get('cantidad_cajas', 0))
+        cliente_uid = data.get('cliente')  # Ahora esperamos el UID del cliente
+        cantidad_kg = float(data.get('peso_vendido', data.get('cantidad_kg', 0)))
+        cantidad_cajas = int(data.get('cajas_vendidas', data.get('cantidad_cajas', 0)))
+        precio_kg = float(data.get('precio_kg', 0))
+        total = float(data.get('total', 0))
+        metodo_pago = data.get('metodo_pago', '')
+        vendedor_id = data.get('vendedor', None)
+        business_id = data.get('business', None)
         vendedor = self.request.user
         comentarios = data.get('comentarios', '')
         nombre_cliente = data.get('nombre_cliente')
         rut_cliente = data.get('rut_cliente')
         telefono_cliente = data.get('telefono_cliente')
         email_cliente = data.get('email_cliente')
+        
+        # Obtener el perfil del usuario autenticado
+        perfil = getattr(vendedor, 'perfil', None)
+        if perfil is None:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'detail': 'Usuario sin perfil asociado'})
+        
+        # Usar el business del perfil si no se proporciona
+        if not business_id:
+            business = perfil.business
+        else:
+            from business.models import Business
+            try:
+                business = Business.objects.get(id=business_id)
+            except Business.DoesNotExist:
+                business = perfil.business
+
+        # Buscar el cliente por UID si se proporciona
+        cliente = None
+        if cliente_uid:
+            try:
+                from .models import Customer
+                cliente = Customer.objects.get(uid=cliente_uid)
+            except Customer.DoesNotExist:
+                from rest_framework.exceptions import ValidationError
+                raise ValidationError({'detail': f'Cliente con UID {cliente_uid} no encontrado'})
 
         from inventory.models import FruitLot, StockReservation
-        # Buscar el lote por uid en lugar de id
-        lote = FruitLot.objects.select_for_update().get(uid=lote_uid, business=vendedor.business)
-        if lote.peso_neto is not None and lote.peso_neto < cantidad_kg:
+        # Buscar el lote por uid
+        try:
+            lote = FruitLot.objects.select_for_update().get(uid=lote_uid)
+        except FruitLot.DoesNotExist:
             from rest_framework.exceptions import ValidationError
-            raise ValidationError({'detail': 'Stock insuficiente en el lote'})
+            raise ValidationError({'detail': f'Lote con UID {lote_uid} no encontrado'})
+            
+        # Verificar stock disponible
+        peso_disponible = lote.peso_disponible()
+        if peso_disponible < cantidad_kg:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'detail': f'Stock insuficiente en el lote. Disponible: {peso_disponible}kg, Solicitado: {cantidad_kg}kg'})
+        
         # Crea SalePending
-        sale_pending = serializer.save(vendedor=vendedor, business=vendedor.business)
-        # Crea StockReservation coherente (todos los campos)
+        sale_pending = serializer.save(
+            lote=lote,
+            cliente=cliente,
+            cantidad_kg=cantidad_kg,
+            cantidad_cajas=cantidad_cajas,
+            nombre_cliente=None if cliente else nombre_cliente,
+            rut_cliente=None if cliente else rut_cliente,
+            telefono_cliente=None if cliente else telefono_cliente,
+            email_cliente=None if cliente else email_cliente,
+            vendedor=vendedor,
+            comentarios=comentarios,
+            business=business,
+            estado="pendiente"
+        )
+        
+        # Crea StockReservation coherente
         StockReservation.objects.create(
             lote=lote,
             usuario=vendedor,
             cantidad_kg=cantidad_kg,
             cantidad_cajas=cantidad_cajas,
-            cliente_id=cliente_id or None,
-            nombre_cliente=None if cliente_id else nombre_cliente,
-            rut_cliente=None if cliente_id else rut_cliente,
-            telefono_cliente=None if cliente_id else telefono_cliente,
-            email_cliente=None if cliente_id else email_cliente,
+            cliente=cliente,
+            nombre_cliente=None if cliente else nombre_cliente,
+            rut_cliente=None if cliente else rut_cliente,
+            telefono_cliente=None if cliente else telefono_cliente,
+            email_cliente=None if cliente else email_cliente,
             estado="en_proceso",
         )
 
@@ -216,11 +270,16 @@ class SaleViewSet(viewsets.ModelViewSet):
         if metodo_pago:
             queryset = queryset.filter(metodo_pago=metodo_pago)
         
-        # Filtrado por estado de pago
+        # Filtrado por estado de pago (booleano pagado)
         pagado = self.request.query_params.get('pagado', None)
         if pagado is not None:
             pagado_bool = pagado.lower() == 'true'
             queryset = queryset.filter(pagado=pagado_bool)
+            
+        # Filtrado por estado_pago específico (pendiente, parcial, completo, cerrada)
+        estado_pago = self.request.query_params.get('estado_pago', None)
+        if estado_pago:
+            queryset = queryset.filter(estado_pago=estado_pago)
         
         # Filtrado por rango de fechas
         start_date_param = self.request.query_params.get('start_date', None)
@@ -410,8 +469,15 @@ def registrar_pago_cliente(request, uid):
         monto = request.data.get('monto')
         metodo_pago = request.data.get('metodo_pago')
         referencia = request.data.get('referencia', '')
-        notas = request.data.get('notas', '')
+        notas = request.data.get('observaciones', request.data.get('notas', ''))
+        
+        # Obtener ventas_uids - aceptar tanto ventas_uids como compra_numero_orden
         ventas_uids = request.data.get('ventas_uids', [])
+        compra_numero_orden = request.data.get('compra_numero_orden')
+        
+        # Si se proporciona compra_numero_orden, usarlo como venta a asociar
+        if compra_numero_orden and not ventas_uids:
+            ventas_uids = [compra_numero_orden]
         
         # Validaciones básicas
         if not monto:
@@ -442,12 +508,63 @@ def registrar_pago_cliente(request, uid):
             )
             pago.save()
             
-            # Asociar las ventas al pago y marcarlas como pagadas
+            # Determinar cómo aplicar el pago
+            ventas_a_pagar = None
+            
+            # Caso 1: Se especificaron ventas específicas para pagar
             if ventas_uids:
-                ventas = Sale.objects.filter(uid__in=ventas_uids, cliente=cliente)
-                if ventas.exists():
-                    # Usar el método asociar_ventas para manejar la asociación y marcado
-                    pago.asociar_ventas(ventas)
+                # Convertir ventas_uids a strings si son objetos UUID
+                ventas_uids_str = [str(uid) for uid in ventas_uids]
+                
+                # Buscar ventas por uid
+                ventas_a_pagar = Sale.objects.filter(uid__in=ventas_uids_str, cliente=cliente)
+                
+                # Si no se encuentran ventas, intentar buscar por código de venta
+                if not ventas_a_pagar.exists():
+                    ventas_a_pagar = Sale.objects.filter(codigo_venta__in=ventas_uids_str, cliente=cliente)
+                
+                # Si aún no se encuentran, intentar búsqueda más flexible
+                if not ventas_a_pagar.exists():
+                    print(f"No se encontraron ventas con los UIDs proporcionados: {ventas_uids_str}")
+                    for uid in ventas_uids_str:
+                        try:
+                            # Búsqueda más flexible
+                            venta = Sale.objects.filter(
+                                models.Q(uid__icontains=uid) | 
+                                models.Q(codigo_venta__icontains=uid),
+                                cliente=cliente
+                            ).first()
+                            if venta:
+                                if ventas_a_pagar is None:
+                                    ventas_a_pagar = [venta]
+                                else:
+                                    ventas_a_pagar = list(ventas_a_pagar) + [venta]
+                        except Exception as e:
+                            print(f"Error al buscar venta: {e}")
+            
+            # Caso 2: No se especificaron ventas, obtener automáticamente las ventas pendientes
+            if not ventas_a_pagar or not ventas_a_pagar.exists():
+                print("Obteniendo automáticamente ventas pendientes del cliente...")
+                # Obtener todas las ventas a crédito con saldo pendiente, ordenadas por fecha (más antiguas primero)
+                ventas_a_pagar = Sale.objects.filter(
+                    cliente=cliente,
+                    metodo_pago='credito',
+                    pagado=False,  # Solo las no pagadas completamente
+                    saldo_pendiente__gt=0  # Con saldo pendiente mayor a cero
+                ).order_by('created_at')
+                
+                if not ventas_a_pagar.exists():
+                    print("No se encontraron ventas pendientes para este cliente.")
+            
+            # Aplicar el pago a las ventas encontradas
+            if ventas_a_pagar and (isinstance(ventas_a_pagar, list) or ventas_a_pagar.exists()):
+                # Usar el método asociar_ventas para manejar la asociación y marcado
+                pago.asociar_ventas(ventas_a_pagar)
+                print(f"Pago aplicado a ventas: {[getattr(v, 'uid', v.id) for v in ventas_a_pagar]}")
+            else:
+                print("No se encontraron ventas para aplicar el pago. Actualizando saldo general del cliente.")
+                # Si no hay ventas específicas, simplemente aplicamos el pago al saldo general del cliente
+                cliente.actualizar_saldo()
             
             # Devolver el pago creado con información actualizada del cliente
             serializer = CustomerPaymentSerializer(pago)
@@ -551,10 +668,11 @@ def ordenes_pendientes_cliente(request, uid):
             return Response({"detail": "No tiene acceso a este cliente"}, 
                             status=status.HTTP_403_FORBIDDEN)
         
-        # Obtener ventas a crédito del cliente
+        # Obtener ventas a crédito del cliente que estén pendientes de pago
         ventas_credito = Sale.objects.filter(
             cliente=cliente, 
-            metodo_pago='credito'
+            metodo_pago='credito',
+            pagado=False  # Solo ventas no pagadas
         ).order_by('-created_at')
         
         # Filtrar solo las ventas con saldo pendiente

@@ -106,9 +106,28 @@ class SalePendingSerializer(serializers.ModelSerializer):
     calibre = serializers.SerializerMethodField()
     cliente_nombre = serializers.SerializerMethodField()
     
+    # Campo alternativo para aceptar peso_vendido como cantidad_kg
+    peso_vendido = serializers.DecimalField(max_digits=7, decimal_places=2, required=False, write_only=True)
+    cajas_vendidas = serializers.IntegerField(required=False, write_only=True)
+    
+    # Configurar campos para aceptar UUIDs
+    lote = serializers.SlugRelatedField(queryset=FruitLot.objects.all(), slug_field='uid')
+    cliente = serializers.SlugRelatedField(queryset=Customer.objects.all(), slug_field='uid', required=False, allow_null=True)
+    
     class Meta:
         model = SalePending
         fields = '__all__'
+        
+    def validate(self, data):
+        # Si se proporciona peso_vendido pero no cantidad_kg, usar peso_vendido como cantidad_kg
+        if 'peso_vendido' in data and 'cantidad_kg' not in data:
+            data['cantidad_kg'] = data.pop('peso_vendido')
+        
+        # Si se proporciona cajas_vendidas pero no cantidad_cajas, usar cajas_vendidas como cantidad_cajas
+        if 'cajas_vendidas' in data and 'cantidad_cajas' not in data:
+            data['cantidad_cajas'] = data.pop('cajas_vendidas')
+            
+        return data
     
     def get_vendedor_nombre(self, obj):
         if obj.vendedor:

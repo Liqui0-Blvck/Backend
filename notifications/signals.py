@@ -82,7 +82,11 @@ def check_low_stock(sender, instance, created, **kwargs):
         if porcentaje_disponible <= umbral_porcentaje or peso_disponible <= umbral_absoluto:
             if not Notification.objects.filter(tipo='stock_bajo', objeto_relacionado_id=str(instance.id)).exists():
                 recipients = get_notification_recipients(instance.business, ['administrador', 'supervisor'])
-                emisor = instance.business.dueno or recipients.first()
+                # Asegurar que emisor sea un CustomUser, no un Perfil
+                if hasattr(instance.business.dueno, 'user'):
+                    emisor = instance.business.dueno.user  # Obtener el usuario del perfil
+                else:
+                    emisor = recipients.first()
                 nombre_producto = instance.producto.nombre if instance.producto else "Producto desconocido"
                 for user in recipients:
                     Notification.objects.create(
