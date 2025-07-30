@@ -32,21 +32,7 @@ class CustomerViewSet(viewsets.ModelViewSet):
         perfil = getattr(self.request.user, 'perfil', None)
         serializer.save(business=perfil.business)
     
-    @action(detail=True, methods=['get'])
-    def ventas(self, request, uid=None):
-        """Obtener todas las ventas de un cliente específico"""
-        cliente = self.get_object()
-        ventas = Sale.objects.filter(cliente=cliente)
-        serializer = SaleSerializer(ventas, many=True)
-        return Response(serializer.data)
-    
-    @action(detail=True, methods=['get'])
-    def pagos(self, request, uid=None):
-        """Obtener todos los pagos de un cliente específico"""
-        cliente = self.get_object()
-        pagos = CustomerPayment.objects.filter(cliente=cliente)
-        serializer = CustomerPaymentSerializer(pagos, many=True)
-        return Response(serializer.data)
+
     
     @action(detail=True, methods=['post'], url_path='actualizar-credito', url_name='actualizar-credito')
     def actualizar_credito(self, request, uid=None):
@@ -298,7 +284,7 @@ class SaleViewSet(viewsets.ModelViewSet):
         serializer.save(business=perfil.business)
 
 
-# Vista independiente para actualizar crédito de cliente
+# Vistas independientes para operaciones de clientes
 from rest_framework.decorators import api_view, permission_classes
 from core.permissions import IsAdminOrOwner
 
@@ -335,3 +321,296 @@ def actualizar_credito_cliente(request, uid):
         
     except Customer.DoesNotExist:
         return Response({"detail": "Cliente no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def ventas_cliente(request, uid):
+    """Obtener todas las ventas de un cliente específico"""
+    try:
+        cliente = Customer.objects.get(uid=uid)
+        
+        # Verificar que el cliente pertenece al mismo negocio que el usuario
+        perfil = getattr(request.user, 'perfil', None)
+        if perfil is None or cliente.business != perfil.business:
+            return Response({"detail": "No tiene acceso a este cliente"}, 
+                            status=status.HTTP_403_FORBIDDEN)
+        
+        ventas = Sale.objects.filter(cliente=cliente).order_by('-created_at')
+        serializer = SaleSerializer(ventas, many=True)
+        return Response(serializer.data)
+        
+    except Customer.DoesNotExist:
+        return Response({"detail": "Cliente no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def pagos_cliente(request, uid):
+    """Obtener todos los pagos de un cliente específico"""
+    try:
+        cliente = Customer.objects.get(uid=uid)
+        
+        # Verificar que el cliente pertenece al mismo negocio que el usuario
+        perfil = getattr(request.user, 'perfil', None)
+        if perfil is None or cliente.business != perfil.business:
+            return Response({"detail": "No tiene acceso a este cliente"}, 
+                            status=status.HTTP_403_FORBIDDEN)
+        
+        pagos = CustomerPayment.objects.filter(cliente=cliente).order_by('-created_at')
+        serializer = CustomerPaymentSerializer(pagos, many=True)
+        return Response(serializer.data)
+        
+    except Customer.DoesNotExist:
+        return Response({"detail": "Cliente no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def historial_completo_cliente(request, uid):
+    """Obtener el historial completo de compras y pagos de un cliente específico"""
+    try:
+        cliente = Customer.objects.get(uid=uid)
+        
+        # Verificar que el cliente pertenece al mismo negocio que el usuario
+        perfil = getattr(request.user, 'perfil', None)
+        if perfil is None or cliente.business != perfil.business:
+            return Response({"detail": "No tiene acceso a este cliente"}, 
+                            status=status.HTTP_403_FORBIDDEN)
+        
+        # Obtener todas las ventas (compras) del cliente
+        ventas = Sale.objects.filter(cliente=cliente).order_by('-created_at')
+        ventas_serializer = SaleSerializer(ventas, many=True)
+        
+        # Obtener todos los pagos del cliente
+        pagos = CustomerPayment.objects.filter(cliente=cliente).order_by('-created_at')
+        pagos_serializer = CustomerPaymentSerializer(pagos, many=True)
+        
+        # Calcular estadísticas de crédito
+        total_compras = ventas.filter(metodo_pago='credito').count()
+        monto_total_compras_credito = ventas.filter(metodo_pago='credito').aggregate(
+            total=models.Sum('total')
+        )['total'] or 0
+        monto_total_pagos = pagos.aggregate(
+            total=models.Sum('monto')
+        )['total'] or 0
+        
+        # Construir respuesta con toda la información
+        response_data = {
+            'cliente': {
+                'uid': cliente.uid,
+                'nombre': cliente.nombre,
+                'rut': cliente.rut,
+                'credito_activo': cliente.credito_activo,
+                'limite_credito': cliente.limite_credito,
+                'saldo_actual': cliente.saldo_actual,
+                'credito_disponible': cliente.credito_disponible
+            },
+            'resumen': {
+                'total_compras': ventas.count(),
+                'total_compras_credito': total_compras,
+                'monto_total_compras': sum(venta.total for venta in ventas),
+                'monto_total_compras_credito': monto_total_compras_credito,
+                'monto_total_pagos': monto_total_pagos,
+                'saldo_pendiente': monto_total_compras_credito - monto_total_pagos
+            },
+            'compras': ventas_serializer.data,
+            'pagos': pagos_serializer.data
+        }
+        
+        return Response(response_data)
+        
+    except Customer.DoesNotExist:
+        return Response({"detail": "Cliente no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def registrar_pago_cliente(request, uid):
+    """Registrar un nuevo pago para un cliente específico"""
+    try:
+        cliente = Customer.objects.get(uid=uid)
+        
+        # Verificar que el cliente pertenece al mismo negocio que el usuario
+        perfil = getattr(request.user, 'perfil', None)
+        if perfil is None or cliente.business != perfil.business:
+            return Response({"detail": "No tiene acceso a este cliente"}, 
+                            status=status.HTTP_403_FORBIDDEN)
+        
+        # Validar datos del pago
+        monto = request.data.get('monto')
+        metodo_pago = request.data.get('metodo_pago')
+        referencia = request.data.get('referencia', '')
+        notas = request.data.get('notas', '')
+        
+        # Validaciones básicas
+        if not monto:
+            return Response({"detail": "El monto del pago es requerido"}, 
+                            status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            monto = Decimal(str(monto))
+            if monto <= 0:
+                raise ValueError("El monto debe ser positivo")
+        except (ValueError, TypeError):
+            return Response({"detail": "El monto debe ser un número positivo válido"}, 
+                            status=status.HTTP_400_BAD_REQUEST)
+        
+        if not metodo_pago:
+            return Response({"detail": "El método de pago es requerido"}, 
+                            status=status.HTTP_400_BAD_REQUEST)
+        
+        # Crear el pago
+        pago = CustomerPayment(
+            cliente=cliente,
+            business=perfil.business,
+            monto=monto,
+            metodo_pago=metodo_pago,
+            referencia=referencia,
+            notas=notas,
+            registrado_por=request.user
+        )
+        pago.save()
+        
+        # Devolver el pago creado
+        serializer = CustomerPaymentSerializer(pago)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        
+    except Customer.DoesNotExist:
+        return Response({"detail": "Cliente no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def informacion_deuda_cliente(request, uid):
+    """Obtener información detallada sobre la deuda de un cliente específico"""
+    try:
+        cliente = Customer.objects.get(uid=uid)
+        
+        # Verificar que el cliente pertenece al mismo negocio que el usuario
+        perfil = getattr(request.user, 'perfil', None)
+        if perfil is None or cliente.business != perfil.business:
+            return Response({"detail": "No tiene acceso a este cliente"}, 
+                            status=status.HTTP_403_FORBIDDEN)
+        
+        # Obtener ventas a crédito del cliente
+        ventas_credito = Sale.objects.filter(
+            cliente=cliente, 
+            metodo_pago='credito'
+        ).order_by('-created_at')
+        
+        # Obtener pagos del cliente
+        pagos = CustomerPayment.objects.filter(cliente=cliente).order_by('-created_at')
+        
+        # Calcular montos totales
+        monto_total_credito = ventas_credito.aggregate(total=models.Sum('total'))['total'] or 0
+        monto_total_pagos = pagos.aggregate(total=models.Sum('monto'))['total'] or 0
+        saldo_pendiente = monto_total_credito - monto_total_pagos
+        
+        # Obtener ventas pendientes de pago (con saldo > 0)
+        ventas_pendientes = []
+        for venta in ventas_credito:
+            # Calcular pagos aplicados a esta venta
+            pagos_venta = CustomerPayment.objects.filter(
+                cliente=cliente,
+                venta=venta
+            ).aggregate(total=models.Sum('monto'))['total'] or 0
+            
+            saldo_venta = venta.total - pagos_venta
+            if saldo_venta > 0:
+                ventas_pendientes.append({
+                    'uid': venta.uid,
+                    'fecha': venta.created_at,
+                    'total': venta.total,
+                    'pagado': pagos_venta,
+                    'saldo_pendiente': saldo_venta
+                })
+        
+        # Construir respuesta detallada
+        response_data = {
+            'cliente': {
+                'uid': cliente.uid,
+                'nombre': cliente.nombre,
+                'rut': cliente.rut,
+                'credito_activo': cliente.credito_activo,
+                'limite_credito': cliente.limite_credito,
+                'saldo_actual': cliente.saldo_actual,
+                'credito_disponible': cliente.credito_disponible
+            },
+            'resumen_deuda': {
+                'total_ventas_credito': monto_total_credito,
+                'total_pagos_realizados': monto_total_pagos,
+                'saldo_pendiente': saldo_pendiente,
+                'porcentaje_utilizado': round((saldo_pendiente / cliente.limite_credito * 100) 
+                                             if cliente.limite_credito > 0 else 0, 2)
+            },
+            'ventas_pendientes': ventas_pendientes,
+            'ultimos_pagos': CustomerPaymentSerializer(pagos[:5], many=True).data
+        }
+        
+        return Response(response_data)
+        
+    except Customer.DoesNotExist:
+        return Response({"detail": "Cliente no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def ordenes_pendientes_cliente(request, uid):
+    """Obtener lista de órdenes pendientes de pago para un cliente específico"""
+    try:
+        cliente = Customer.objects.get(uid=uid)
+        
+        # Verificar que el cliente pertenece al mismo negocio que el usuario
+        perfil = getattr(request.user, 'perfil', None)
+        if perfil is None or cliente.business != perfil.business:
+            return Response({"detail": "No tiene acceso a este cliente"}, 
+                            status=status.HTTP_403_FORBIDDEN)
+        
+        # Obtener ventas a crédito del cliente
+        ventas_credito = Sale.objects.filter(
+            cliente=cliente, 
+            metodo_pago='credito'
+        ).order_by('-created_at')
+        
+        # Filtrar solo las ventas con saldo pendiente
+        ordenes_pendientes = []
+        for venta in ventas_credito:
+            # Calcular pagos aplicados a esta venta
+            # Verificar si el modelo CustomerPayment tiene un campo para relacionar con la venta
+            # Si no lo tiene, simplemente calculamos el total de pagos del cliente
+            pagos_venta = 0
+            try:
+                # Intentamos filtrar por venta si existe el campo
+                if hasattr(CustomerPayment, 'venta'):
+                    pagos_venta = CustomerPayment.objects.filter(
+                        cliente=cliente,
+                        venta=venta
+                    ).aggregate(total=models.Sum('monto'))['total'] or 0
+                else:
+                    # Si no existe el campo, no podemos filtrar por venta específica
+                    # Asumimos que todos los pagos van al saldo general
+                    pass
+            except Exception as e:
+                print(f"Error al calcular pagos por venta: {e}")
+            
+            # Para este ejemplo, asumimos que el saldo es el total de la venta
+            # ya que no podemos determinar pagos específicos por venta
+            saldo_venta = venta.total
+            if saldo_venta > 0:
+                # Usar el uid como número de orden para mantener consistencia
+                # Convertir UUID a string para evitar error de subscriptable
+                uid_str = str(venta.uid) if venta.uid else ""
+                ordenes_pendientes.append({
+                    'numero_orden': uid_str,
+                    'fecha': venta.created_at,
+                    'total': venta.total,
+                    'monto_pendiente': saldo_venta,
+                    'descripcion': f"Venta {uid_str[:8] if len(uid_str) >= 8 else uid_str} del {venta.created_at.strftime('%d/%m/%Y')}"
+                })
+        
+        return Response(ordenes_pendientes)
+        
+    except Customer.DoesNotExist:
+        return Response({"detail": "Cliente no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+

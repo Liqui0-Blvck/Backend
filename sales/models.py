@@ -124,6 +124,7 @@ class CustomerPayment(BaseModel):
         ("efectivo", "Efectivo"),
         ("transferencia", "Transferencia"),
         ("transbank", "Transbank"),
+        ("cheque", "Cheque"),
         ("otro", "Otro")
     ]
     monto = models.DecimalField(max_digits=10, decimal_places=2)
