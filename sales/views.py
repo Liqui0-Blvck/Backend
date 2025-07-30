@@ -31,37 +31,6 @@ class CustomerViewSet(viewsets.ModelViewSet):
         # Asignar automáticamente el negocio del usuario autenticado
         perfil = getattr(self.request.user, 'perfil', None)
         serializer.save(business=perfil.business)
-    
-
-    
-    @action(detail=True, methods=['post'], url_path='actualizar-credito', url_name='actualizar-credito')
-    def actualizar_credito(self, request, uid=None):
-        """Actualizar la configuración de crédito de un cliente"""
-        cliente = self.get_object()
-        
-        # Verificar permisos - solo administradores pueden modificar el crédito
-        if not request.user.is_staff and not request.user.is_superuser:
-            return Response({"detail": "No tiene permisos para modificar el crédito"}, 
-                            status=status.HTTP_403_FORBIDDEN)
-        
-        # Actualizar campos de crédito
-        credito_activo = request.data.get('credito_activo')
-        limite_credito = request.data.get('limite_credito')
-        
-        if credito_activo is not None:
-            cliente.credito_activo = credito_activo
-        
-        if limite_credito is not None:
-            try:
-                cliente.limite_credito = Decimal(str(limite_credito))
-            except (ValueError, TypeError):
-                return Response({"detail": "El límite de crédito debe ser un número válido"}, 
-                                status=status.HTTP_400_BAD_REQUEST)
-        
-        cliente.save()
-        serializer = self.get_serializer(cliente)
-        return Response(serializer.data)
-
 
 
 class SalePendingViewSet(viewsets.ModelViewSet):
@@ -442,6 +411,7 @@ def registrar_pago_cliente(request, uid):
         metodo_pago = request.data.get('metodo_pago')
         referencia = request.data.get('referencia', '')
         notas = request.data.get('notas', '')
+        ventas_uids = request.data.get('ventas_uids', [])
         
         # Validaciones básicas
         if not monto:
@@ -460,98 +430,112 @@ def registrar_pago_cliente(request, uid):
             return Response({"detail": "El método de pago es requerido"}, 
                             status=status.HTTP_400_BAD_REQUEST)
         
-        # Crear el pago
-        pago = CustomerPayment(
-            cliente=cliente,
-            business=perfil.business,
-            monto=monto,
-            metodo_pago=metodo_pago,
-            referencia=referencia,
-            notas=notas,
-            registrado_por=request.user
-        )
-        pago.save()
-        
-        # Devolver el pago creado
-        serializer = CustomerPaymentSerializer(pago)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-        
-    except Customer.DoesNotExist:
-        return Response({"detail": "Cliente no encontrado"}, status=status.HTTP_404_NOT_FOUND)
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def informacion_deuda_cliente(request, uid):
-    """Obtener información detallada sobre la deuda de un cliente específico"""
-    try:
-        cliente = Customer.objects.get(uid=uid)
-        
-        # Verificar que el cliente pertenece al mismo negocio que el usuario
-        perfil = getattr(request.user, 'perfil', None)
-        if perfil is None or cliente.business != perfil.business:
-            return Response({"detail": "No tiene acceso a este cliente"}, 
-                            status=status.HTTP_403_FORBIDDEN)
-        
-        # Obtener ventas a crédito del cliente
-        ventas_credito = Sale.objects.filter(
-            cliente=cliente, 
-            metodo_pago='credito'
-        ).order_by('-created_at')
-        
-        # Obtener pagos del cliente
-        pagos = CustomerPayment.objects.filter(cliente=cliente).order_by('-created_at')
-        
-        # Calcular montos totales
-        monto_total_credito = ventas_credito.aggregate(total=models.Sum('total'))['total'] or 0
-        monto_total_pagos = pagos.aggregate(total=models.Sum('monto'))['total'] or 0
-        saldo_pendiente = monto_total_credito - monto_total_pagos
-        
-        # Obtener ventas pendientes de pago (con saldo > 0)
-        ventas_pendientes = []
-        for venta in ventas_credito:
-            # Calcular pagos aplicados a esta venta
-            pagos_venta = CustomerPayment.objects.filter(
+        with transaction.atomic():
+            # Crear el pago
+            pago = CustomerPayment(
                 cliente=cliente,
-                venta=venta
-            ).aggregate(total=models.Sum('monto'))['total'] or 0
+                business=perfil.business,
+                monto=monto,
+                metodo_pago=metodo_pago,
+                referencia=referencia,
+                notas=notas
+            )
+            pago.save()
             
-            saldo_venta = venta.total - pagos_venta
-            if saldo_venta > 0:
-                ventas_pendientes.append({
-                    'uid': venta.uid,
-                    'fecha': venta.created_at,
-                    'total': venta.total,
-                    'pagado': pagos_venta,
-                    'saldo_pendiente': saldo_venta
-                })
-        
-        # Construir respuesta detallada
-        response_data = {
-            'cliente': {
-                'uid': cliente.uid,
-                'nombre': cliente.nombre,
-                'rut': cliente.rut,
-                'credito_activo': cliente.credito_activo,
-                'limite_credito': cliente.limite_credito,
-                'saldo_actual': cliente.saldo_actual,
-                'credito_disponible': cliente.credito_disponible
-            },
-            'resumen_deuda': {
-                'total_ventas_credito': monto_total_credito,
-                'total_pagos_realizados': monto_total_pagos,
-                'saldo_pendiente': saldo_pendiente,
-                'porcentaje_utilizado': round((saldo_pendiente / cliente.limite_credito * 100) 
-                                             if cliente.limite_credito > 0 else 0, 2)
-            },
-            'ventas_pendientes': ventas_pendientes,
-            'ultimos_pagos': CustomerPaymentSerializer(pagos[:5], many=True).data
-        }
-        
-        return Response(response_data)
+            # Asociar las ventas al pago y marcarlas como pagadas
+            if ventas_uids:
+                ventas = Sale.objects.filter(uid__in=ventas_uids, cliente=cliente)
+                if ventas.exists():
+                    # Usar el método asociar_ventas para manejar la asociación y marcado
+                    pago.asociar_ventas(ventas)
+            
+            # Devolver el pago creado con información actualizada del cliente
+            serializer = CustomerPaymentSerializer(pago)
+            cliente_serializer = CustomerSerializer(cliente)
+            
+            response_data = {
+                'pago': serializer.data,
+                'cliente': cliente_serializer.data
+            }
+            
+            return Response(response_data, status=status.HTTP_201_CREATED)
         
     except Customer.DoesNotExist:
         return Response({"detail": "Cliente no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+
+
+# @api_view(['GET'])
+# @permission_classes([IsAuthenticated])
+# def informacion_deuda_cliente(request, uid):
+#     """Obtener información detallada sobre la deuda de un cliente específico"""
+#     try:
+#         cliente = Customer.objects.get(uid=uid)
+        
+#         # Verificar que el cliente pertenece al mismo negocio que el usuario
+#         perfil = getattr(request.user, 'perfil', None)
+#         if perfil is None or cliente.business != perfil.business:
+#             return Response({"detail": "No tiene acceso a este cliente"}, 
+#                             status=status.HTTP_403_FORBIDDEN)
+        
+#         # Obtener ventas a crédito del cliente
+#         ventas_credito = Sale.objects.filter(
+#             cliente=cliente, 
+#             metodo_pago='credito'
+#         ).order_by('-created_at')
+        
+#         # Obtener pagos del cliente
+#         pagos = CustomerPayment.objects.filter(cliente=cliente).order_by('-created_at')
+        
+#         # Calcular montos totales
+#         monto_total_credito = ventas_credito.aggregate(total=models.Sum('total'))['total'] or 0
+#         monto_total_pagos = pagos.aggregate(total=models.Sum('monto'))['total'] or 0
+#         saldo_pendiente = monto_total_credito - monto_total_pagos
+        
+#         # Obtener ventas pendientes de pago (con saldo > 0)
+#         ventas_pendientes = []
+#         for venta in ventas_credito:
+#             # Calcular pagos aplicados a esta venta
+#             pagos_venta = CustomerPayment.objects.filter(
+#                 cliente=cliente,
+#                 venta=venta
+#             ).aggregate(total=models.Sum('monto'))['total'] or 0
+            
+#             saldo_venta = venta.total - pagos_venta
+#             if saldo_venta > 0:
+#                 ventas_pendientes.append({
+#                     'uid': venta.uid,
+#                     'fecha': venta.created_at,
+#                     'total': venta.total,
+#                     'pagado': pagos_venta,
+#                     'saldo_pendiente': saldo_venta
+#                 })
+        
+#         # Construir respuesta detallada
+#         response_data = {
+#             'cliente': {
+#                 'uid': cliente.uid,
+#                 'nombre': cliente.nombre,
+#                 'rut': cliente.rut,
+#                 'credito_activo': cliente.credito_activo,
+#                 'limite_credito': cliente.limite_credito,
+#                 'saldo_actual': cliente.saldo_actual,
+#                 'credito_disponible': cliente.credito_disponible
+#             },
+#             'resumen_deuda': {
+#                 'total_ventas_credito': monto_total_credito,
+#                 'total_pagos_realizados': monto_total_pagos,
+#                 'saldo_pendiente': saldo_pendiente,
+#                 'porcentaje_utilizado': round((saldo_pendiente / cliente.limite_credito * 100) 
+#                                              if cliente.limite_credito > 0 else 0, 2)
+#             },
+#             'ventas_pendientes': ventas_pendientes,
+#             'ultimos_pagos': CustomerPaymentSerializer(pagos[:5], many=True).data
+#         }
+        
+#         return Response(response_data)
+        
+#     except Customer.DoesNotExist:
+#         return Response({"detail": "Cliente no encontrado"}, status=status.HTTP_404_NOT_FOUND)
 
 
 @api_view(['GET'])
@@ -606,7 +590,7 @@ def ordenes_pendientes_cliente(request, uid):
                     'fecha': venta.created_at,
                     'total': venta.total,
                     'monto_pendiente': saldo_venta,
-                    'descripcion': f"Venta {uid_str[:8] if len(uid_str) >= 8 else uid_str} del {venta.created_at.strftime('%d/%m/%Y')}"
+                    'descripcion': f"Venta {venta.codigo_venta} del {venta.created_at.strftime('%d/%m/%Y')}"
                 })
         
         return Response(ordenes_pendientes)

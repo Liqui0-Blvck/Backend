@@ -1,8 +1,11 @@
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, m2m_changed
 from django.dispatch import receiver
-from .models import Sale, CustomerPayment
-from django.db import transaction
+from .models import Sale, CustomerPayment, Customer
+from django.db import transaction, models
 from django.utils import timezone
+import logging
+
+logger = logging.getLogger(__name__)
 
 @receiver(post_save, sender=Sale)
 def update_customer_credit(sender, instance, created, **kwargs):
@@ -45,22 +48,51 @@ def update_customer_credit(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender=CustomerPayment)
-def update_sales_payment_status(sender, instance, created, **kwargs):
+def update_customer_balance(sender, instance, created, **kwargs):
     """
     Señal que se activa después de guardar un pago de cliente.
+    Actualiza el saldo del cliente y su crédito disponible.
+    """
+    if instance.cliente:
+        logger.info(f"Actualizando saldo para cliente {instance.cliente.nombre} tras pago de ${instance.monto}")
+        # No es necesario hacer nada más aquí, ya que el saldo_actual y credito_disponible
+        # son propiedades calculadas que consultan los pagos y ventas en tiempo real
+
+
+@receiver(m2m_changed, sender=CustomerPayment.ventas.through)
+def update_sales_payment_status(sender, instance, action, pk_set, **kwargs):
+    """
+    Señal que se activa cuando se asocian ventas a un pago.
     Actualiza el estado de las ventas asociadas si el pago las cubre.
     """
-    # Solo procesar si es un pago nuevo
-    if created and instance.ventas.exists():
+    # Solo procesar cuando se añaden ventas al pago
+    if action == 'post_add' and pk_set:
+        logger.info(f"Procesando pago {instance.uid} para {len(pk_set)} ventas")
+        
         with transaction.atomic():
-            # Obtener todas las ventas asociadas a este pago
+            # Obtener todas las ventas asociadas a este pago que no están pagadas
             ventas = instance.ventas.filter(pagado=False)
             
+            if not ventas.exists():
+                logger.info("No hay ventas pendientes asociadas a este pago")
+                return
+                
             # Calcular el total de las ventas no pagadas
             total_ventas = sum(venta.total for venta in ventas)
+            logger.info(f"Total de ventas pendientes: ${total_ventas}, monto del pago: ${instance.monto}")
             
             # Si el pago cubre el total, marcar las ventas como pagadas
             if instance.monto >= total_ventas:
                 for venta in ventas:
                     venta.pagado = True
                     venta.save(update_fields=['pagado'])
+                logger.info(f"Se marcaron {ventas.count()} ventas como pagadas")
+            else:
+                logger.info(f"El pago no cubre el total de las ventas pendientes (${total_ventas})")
+                
+            # Actualizar el cliente para reflejar el nuevo saldo
+            if instance.cliente:
+                # Forzar una actualización del cliente para refrescar las propiedades calculadas
+                instance.cliente.save(update_fields=['updated_at'])
+                logger.info(f"Saldo actualizado para cliente {instance.cliente.nombre}: ${instance.cliente.saldo_actual}, disponible: ${instance.cliente.credito_disponible}")
+
