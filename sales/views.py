@@ -38,6 +38,7 @@ class SalePendingViewSet(viewsets.ModelViewSet):
     serializer_class = SalePendingSerializer
     permission_classes = [IsAuthenticated]
     http_method_names = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']
+    lookup_field = 'uid'
 
     def get_queryset(self):
         user = self.request.user
@@ -96,10 +97,10 @@ class SalePendingViewSet(viewsets.ModelViewSet):
         business_id = data.get('business', None)
         vendedor = self.request.user
         comentarios = data.get('comentarios', '')
-        nombre_cliente = data.get('nombre_cliente')
-        rut_cliente = data.get('rut_cliente')
-        telefono_cliente = data.get('telefono_cliente')
-        email_cliente = data.get('email_cliente')
+        # nombre_cliente = data.get('nombre_cliente')
+        # rut_cliente = data.get('rut_cliente')
+        # telefono_cliente = data.get('telefono_cliente')
+        # email_cliente = data.get('email_cliente')
         
         # Obtener el perfil del usuario autenticado
         perfil = getattr(vendedor, 'perfil', None)
@@ -118,11 +119,21 @@ class SalePendingViewSet(viewsets.ModelViewSet):
                 business = perfil.business
 
         # Buscar el cliente por UID si se proporciona
+        nombre_cliente = None
+        rut_cliente = None
+        telefono_cliente = None
+        email_cliente = None
+
+
         cliente = None
         if cliente_uid:
             try:
                 from .models import Customer
                 cliente = Customer.objects.get(uid=cliente_uid)
+                nombre_cliente = cliente.nombre
+                rut_cliente = cliente.rut
+                telefono_cliente = cliente.telefono
+                email_cliente = cliente.email
             except Customer.DoesNotExist:
                 from rest_framework.exceptions import ValidationError
                 raise ValidationError({'detail': f'Cliente con UID {cliente_uid} no encontrado'})
@@ -147,10 +158,10 @@ class SalePendingViewSet(viewsets.ModelViewSet):
             cliente=cliente,
             cantidad_kg=cantidad_kg,
             cantidad_cajas=cantidad_cajas,
-            nombre_cliente=None if cliente else nombre_cliente,
-            rut_cliente=None if cliente else rut_cliente,
-            telefono_cliente=None if cliente else telefono_cliente,
-            email_cliente=None if cliente else email_cliente,
+            nombre_cliente=nombre_cliente,
+            rut_cliente=rut_cliente,
+            telefono_cliente=telefono_cliente,
+            email_cliente=email_cliente,
             vendedor=vendedor,
             comentarios=comentarios,
             business=business,
@@ -678,27 +689,9 @@ def ordenes_pendientes_cliente(request, uid):
         # Filtrar solo las ventas con saldo pendiente
         ordenes_pendientes = []
         for venta in ventas_credito:
-            # Calcular pagos aplicados a esta venta
-            # Verificar si el modelo CustomerPayment tiene un campo para relacionar con la venta
-            # Si no lo tiene, simplemente calculamos el total de pagos del cliente
-            pagos_venta = 0
-            try:
-                # Intentamos filtrar por venta si existe el campo
-                if hasattr(CustomerPayment, 'venta'):
-                    pagos_venta = CustomerPayment.objects.filter(
-                        cliente=cliente,
-                        venta=venta
-                    ).aggregate(total=models.Sum('monto'))['total'] or 0
-                else:
-                    # Si no existe el campo, no podemos filtrar por venta específica
-                    # Asumimos que todos los pagos van al saldo general
-                    pass
-            except Exception as e:
-                print(f"Error al calcular pagos por venta: {e}")
-            
-            # Para este ejemplo, asumimos que el saldo es el total de la venta
-            # ya que no podemos determinar pagos específicos por venta
-            saldo_venta = venta.total
+            # Usar el campo saldo_pendiente de la venta, que ya está calculado correctamente
+            # Este campo se actualiza cada vez que se registra un pago asociado a la venta
+            saldo_venta = venta.saldo_pendiente
             if saldo_venta > 0:
                 # Usar el uid como número de orden para mantener consistencia
                 # Convertir UUID a string para evitar error de subscriptable

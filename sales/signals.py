@@ -16,11 +16,14 @@ def convert_pending_to_sale(sender, instance, **kwargs):
     Signal que se activa antes de guardar una venta pendiente.
     Si el estado cambia a 'confirmada', crea una venta (Sale) a partir de la venta pendiente.
     """
+    logger.info(f"Signal pre_save activado para SalePending {instance.pk} - Estado: {instance.estado}")
+    
     # Verificar si es una instancia existente (no nueva)
     if instance.pk:
         try:
             # Obtener el estado anterior
             old_instance = SalePending.objects.get(pk=instance.pk)
+            logger.info(f"Estado anterior: {old_instance.estado}, Estado nuevo: {instance.estado}")
             
             # Si el estado cambió a 'confirmada'
             if old_instance.estado != 'confirmada' and instance.estado == 'confirmada':
@@ -28,6 +31,7 @@ def convert_pending_to_sale(sender, instance, **kwargs):
                     # Crear una nueva venta a partir de la venta pendiente
                     sale = Sale(
                         uid=uuid.uuid4(),  # Generar nuevo UUID
+                        codigo_venta=instance.codigo_venta,  # Transferir el código de venta
                         lote=instance.lote,
                         cliente=instance.cliente,
                         vendedor=instance.vendedor,
@@ -138,28 +142,31 @@ def update_fruit_lot_inventory(sender, instance, created, **kwargs):
                     
                     # Descontar cajas vendidas
                     if instance.cajas_vendidas > 0:
-                        lote.cajas_disponibles = max(0, lote.cajas_disponibles - instance.cajas_vendidas)
+                        lote.cantidad_cajas = max(0, lote.cantidad_cajas - instance.cajas_vendidas)
                     
-                    # Descontar peso vendido
+                    # Descontar peso vendido - FruitLot no tiene peso_neto_disponible, usamos peso_neto directamente
                     if instance.peso_vendido > Decimal('0'):
-                        lote.peso_neto_disponible = max(Decimal('0'), lote.peso_neto_disponible - instance.peso_vendido)
-                        
-                        # Actualizar porcentaje disponible
-                        if lote.peso_neto > 0:
-                            lote.porcentaje_disponible = (lote.peso_neto_disponible / lote.peso_neto) * 100
-                        else:
-                            lote.porcentaje_disponible = 0
+                        # Actualizamos directamente el peso_neto
+                        if lote.peso_neto is not None:
+                            lote.peso_neto = max(Decimal('0'), lote.peso_neto - instance.peso_vendido)
                     
                     # Actualizar estado del lote según disponibilidad
-                    if lote.peso_neto_disponible <= 0 or lote.porcentaje_disponible <= 0:
+                    # Forzar estado 'agotado' si tanto las cajas como el peso neto son 0
+                    if lote.cantidad_cajas == 0 and (lote.peso_neto is None or lote.peso_neto <= Decimal('0')):
                         lote.estado_lote = 'agotado'
-                    
-                    # Guardar cambios en el lote
-                    lote.save(update_fields=['cajas_disponibles', 'peso_neto_disponible', 'porcentaje_disponible', 'estado_lote', 'updated_at'])
-                    logger.info(f"Inventario actualizado: Lote {lote.uid} - Disponible: {lote.peso_neto_disponible}kg/{lote.cajas_disponibles}cajas")
+                        # Guardar cambios en el lote incluyendo el estado_lote
+                        lote.save(update_fields=['cantidad_cajas', 'peso_neto', 'estado_lote', 'updated_at'])
+                        logger.info(f"Lote {lote.uid} marcado como agotado: cajas={lote.cantidad_cajas}, peso_neto={lote.peso_neto}")
+                    else:
+                        # Guardar cambios en el lote sin modificar estado_lote
+                        lote.save(update_fields=['cantidad_cajas', 'peso_neto', 'updated_at'])
+                    logger.info(f"Inventario actualizado: Lote {lote.uid} - Disponible: {lote.peso_neto}kg/{lote.cantidad_cajas}cajas")
         
         except Exception as e:
             logger.error(f"Error al actualizar inventario para venta {instance.codigo_venta or instance.id}: {str(e)}")
+            # Registrar más detalles para depuración
+            import traceback
+            logger.error(traceback.format_exc())
 
 
 

@@ -281,6 +281,21 @@ class StockReportView(APIView):
             business=business
         ).select_related('producto', 'box_type', 'pallet_type')
         
+        # Verificar si hay un filtro específico por estado_lote
+        estado_lote = request.query_params.get('estado_lote', None)
+        
+        # Si se solicita específicamente un estado, aplicar ese filtro
+        if estado_lote is not None:
+            queryset = queryset.filter(estado_lote=estado_lote)
+        else:
+            # Si no hay filtro específico, ocultar los lotes agotados por defecto
+            queryset = queryset.exclude(estado_lote='agotado')
+        
+        # Excluir lotes que tienen ventas pendientes asociadas
+        from sales.models import SalePending
+        lotes_con_ventas_pendientes = SalePending.objects.filter(estado='pendiente').values_list('lote', flat=True)
+        queryset = queryset.exclude(id__in=lotes_con_ventas_pendientes)
+        
         # Aplicar filtros
         if producto_id:
             queryset = queryset.filter(producto_id=producto_id)

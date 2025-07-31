@@ -135,8 +135,8 @@ def dispatch_notification(sender, instance, created, **kwargs):
     if created:
         send_notification_to_websocket(instance)
         
-        # Preparar y enviar webhook
-        if instance.usuario.perfil and instance.usuario.perfil.business:
+        # Preparar y enviar webhook - verificar si el usuario tiene perfil
+        if hasattr(instance.usuario, 'perfil') and instance.usuario.perfil and hasattr(instance.usuario.perfil, 'business') and instance.usuario.perfil.business:
             webhook_data = {
                 'notification_id': str(instance.uid),
                 'user_email': instance.usuario.email,

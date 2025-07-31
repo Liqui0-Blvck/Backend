@@ -29,8 +29,16 @@ class CustomerSerializer(serializers.ModelSerializer):
             'pagado': venta.pagado,
             'estado_pago': venta.estado_pago,
             'saldo_pendiente': venta.saldo_pendiente,
+            'monto_pagado': venta.total - venta.saldo_pendiente,  # Monto ya pagado
+            'porcentaje_pagado': round((1 - (venta.saldo_pendiente / venta.total)) * 100 if venta.total > 0 else 0, 2),  # Porcentaje pagado
             'producto': venta.lote.producto.nombre if venta.lote and venta.lote.producto else None,
-            'peso_vendido': venta.peso_vendido
+            'peso_vendido': venta.peso_vendido,
+            'pagos_asociados': [{
+                'uid': pago.uid,
+                'fecha': pago.created_at,
+                'monto': pago.monto,
+                'metodo_pago': pago.metodo_pago
+            } for pago in venta.pagos.all().order_by('-created_at')[:3]]  # Últimos 3 pagos asociados a esta venta
         } for venta in ultimas_compras]
     
     def get_ultimos_pagos(self, obj):
@@ -76,7 +84,8 @@ class CustomerSerializer(serializers.ModelSerializer):
 
 class CustomerPaymentSerializer(serializers.ModelSerializer):
     cliente_nombre = serializers.SerializerMethodField(read_only=True)
-    ventas_info = serializers.SerializerMethodField(read_only=True)
+    orden_asociada = serializers.SerializerMethodField(read_only=True)
+
     
     class Meta:
         model = CustomerPayment
@@ -86,17 +95,23 @@ class CustomerPaymentSerializer(serializers.ModelSerializer):
         if obj.cliente:
             return obj.cliente.nombre
         return None
+
+    def get_orden_asociada(self, obj):
+        if obj.ventas.exists():
+            return obj.ventas.first().codigo_venta
+        return None
     
-    def get_ventas_info(self, obj):
-        """Devuelve información resumida de las ventas asociadas a este pago"""
-        return [{
-            'uid': venta.uid,
-            'codigo_venta': venta.codigo_venta,
-            'total': venta.total,
-            'saldo_pendiente': venta.saldo_pendiente,
-            'estado_pago': venta.estado_pago,
-            'fecha': venta.created_at
-        } for venta in obj.ventas.all().order_by('created_at')]
+    # def get_ventas_info(self, obj):
+    #     """Devuelve información resumida de las ventas asociadas a este pago"""
+    #     return [{
+    #         'uid': venta.uid,
+    #         'codigo_venta': venta.codigo_venta,
+    #         'total': venta.total,
+    #         'saldo_pendiente': venta.saldo_pendiente,
+    #         'estado_pago': venta.estado_pago,
+    #         'fecha': venta.created_at,
+    #         'orden_asociada': venta.codigo_venta
+    #     } for venta in obj.ventas.all().order_by('created_at')]
 
 
 class SalePendingSerializer(serializers.ModelSerializer):
@@ -109,6 +124,9 @@ class SalePendingSerializer(serializers.ModelSerializer):
     # Campo alternativo para aceptar peso_vendido como cantidad_kg
     peso_vendido = serializers.DecimalField(max_digits=7, decimal_places=2, required=False, write_only=True)
     cajas_vendidas = serializers.IntegerField(required=False, write_only=True)
+    
+    # Incluir toda la información del lote
+    lote_info = serializers.SerializerMethodField()
     
     # Configurar campos para aceptar UUIDs
     lote = serializers.SlugRelatedField(queryset=FruitLot.objects.all(), slug_field='uid')
@@ -150,6 +168,14 @@ class SalePendingSerializer(serializers.ModelSerializer):
         elif obj.nombre_cliente:
             return obj.nombre_cliente
         return None
+        
+    def get_lote_info(self, obj):
+        """Devuelve toda la información del lote para el frontend"""
+        if not obj.lote:
+            return None
+            
+        from inventory.serializers import FruitLotSerializer
+        return FruitLotSerializer(obj.lote).data
 
 
 class SaleSerializer(serializers.ModelSerializer):

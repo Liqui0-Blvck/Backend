@@ -32,9 +32,10 @@ class Customer(BaseModel):
     @property
     def saldo_actual(self):
         """Calcula el saldo actual del cliente basado en ventas a crédito no pagadas"""
-        # Suma de todas las ventas a crédito no pagadas
+        # Suma de los saldos pendientes de todas las ventas a crédito no pagadas
+        # Esto tiene en cuenta los pagos parciales realizados
         ventas_credito = self.sales.filter(metodo_pago='credito', pagado=False).aggregate(
-            total=models.Sum('total')
+            total=models.Sum('saldo_pendiente')
         )['total'] or Decimal('0.00')
         
         return ventas_credito
@@ -201,6 +202,7 @@ class Sale(BaseModel):
 
 class SalePending(BaseModel):
     uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
+    codigo_venta = models.CharField(max_length=32, unique=True, editable=False, null=True, blank=True)
     
     ESTADO_CHOICES = [
         ("pendiente", "Pendiente"),
