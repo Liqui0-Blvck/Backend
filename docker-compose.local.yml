@@ -1,0 +1,68 @@
+services:
+  db:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_DB: fruitpos       
+      POSTGRES_USER: fruitpos_user
+      POSTGRES_PASSWORD: fruitpos_pass        
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:6
+    restart: always
+    ports:
+      - "6379:6379"
+
+  api:
+    build: .
+    # Cambiamos el comando para no usar el entrypoint
+    command: ["daphne", "-b", "0.0.0.0", "-p", "8000", "backend.asgi:application"]
+    volumes:
+      # Excluimos el docker-entrypoint.sh del montaje para evitar sobrescribirlo
+      - ./accounts:/app/accounts
+      - ./announcements:/app/announcements
+      - ./backend:/app/backend
+      - ./business:/app/business
+      - ./core:/app/core
+      - ./docs:/app/docs
+      - ./inventory:/app/inventory
+      - ./media:/app/media
+      - ./notifications:/app/notifications
+      - ./reports:/app/reports
+      - ./sales:/app/sales
+      - ./scripts:/app/scripts
+      - ./shifts:/app/shifts
+      - ./static:/app/static
+      - ./manage.py:/app/manage.py
+      - ./requirements.txt:/app/requirements.txt
+    expose:
+      - "8000"
+    depends_on:
+      - db
+      - redis
+    environment:
+      DJANGO_SETTINGS_MODULE: backend.settings
+      POSTGRES_DB: fruitpos
+      POSTGRES_USER: fruitpos_user
+      POSTGRES_PASSWORD: fruitpos_pass
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+
+  nginx:
+    image: nginx:1.25
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./static:/static
+      - ./media:/media
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:

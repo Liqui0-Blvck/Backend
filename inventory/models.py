@@ -13,10 +13,15 @@ class Product(BaseModel):
         ('unidad', 'Unidad'),
         ('kilogramo', 'Kilogramo'),
     ]
+    TIPO_PRODUCTO_CHOICES = [
+        ('palta', 'Palta'),
+        ('otro', 'Otro'),
+    ]
     uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
     nombre = models.CharField(max_length=100)
     marca = models.CharField(max_length=50, blank=True)
     unidad = models.CharField(max_length=20, default="caja", choices=options)
+    tipo_producto = models.CharField(max_length=10, choices=TIPO_PRODUCTO_CHOICES, default='palta', help_text='Tipo de producto: palta o otro')
     business = models.ForeignKey('business.Business', on_delete=models.CASCADE)
     activo = models.BooleanField(default=True)
     image_path = models.ImageField(upload_to='product_images', blank=True, null=True)
@@ -58,6 +63,11 @@ class FruitLot(BaseModel):
     box_type = models.ForeignKey('BoxType', on_delete=models.CASCADE)
     pallet_type = models.ForeignKey('PalletType', on_delete=models.CASCADE, null=True, blank=True)
     cantidad_cajas = models.PositiveIntegerField()
+    # Campos para productos tipo 'otro' (por unidades)
+    cantidad_unidades = models.PositiveIntegerField(default=0, help_text="Cantidad total de unidades en el lote (para productos que no son palta)")
+    unidades_por_caja = models.PositiveIntegerField(default=0, help_text="Cantidad de unidades por caja (para productos que no son palta)")
+    unidades_reservadas = models.PositiveIntegerField(default=0, help_text="Cantidad de unidades reservadas (para productos que no son palta)")
+    # Campos para productos tipo 'palta' (por peso)
     peso_bruto = models.DecimalField(max_digits=8, decimal_places=2)
     peso_neto = models.DecimalField(max_digits=8, decimal_places=2, blank=True, null=True)
     qr_code = models.CharField(max_length=128, unique=True)
@@ -69,8 +79,8 @@ class FruitLot(BaseModel):
     costo_inicial = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     costo_diario_almacenaje = models.DecimalField(max_digits=8, decimal_places=2, default=0)
     # Campos para rango de precios sugeridos
-    precio_sugerido_min = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True, help_text="Precio mínimo sugerido por kg")
-    precio_sugerido_max = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True, help_text="Precio máximo sugerido por kg")
+    precio_sugerido_min = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True, help_text="Precio mínimo sugerido por kg o unidad")
+    precio_sugerido_max = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True, help_text="Precio máximo sugerido por kg o unidad")
     # costo_actualizado se calcula sobre la marcha
 
     estado_lote = models.CharField(
@@ -92,31 +102,60 @@ class FruitLot(BaseModel):
         
     def peso_disponible(self):
         """Calcula el peso disponible del lote (peso neto - peso reservado)"""
+        # Solo aplica para productos tipo palta
+        if not self.producto or self.producto.tipo_producto != 'palta':
+            return 0
+            
         from django.db.models import Sum
         # Evitar importación circular usando el modelo directamente
         neto = float(self.peso_neto or 0)
         # Usamos el modelo desde el mismo app sin importarlo
         reservado = self.__class__._meta.apps.get_model('inventory', 'StockReservation').objects.filter(lote=self).aggregate(total=Sum('cantidad_kg'))['total'] or 0
         return neto - float(reservado) if neto > float(reservado) else 0
+        
+    def unidades_disponibles(self):
+        """Calcula las unidades disponibles del lote (cantidad_unidades - unidades_reservadas)"""
+        # Solo aplica para productos tipo otro (no palta)
+        if not self.producto or self.producto.tipo_producto != 'otro':
+            return 0
+            
+        return max(0, self.cantidad_unidades - self.unidades_reservadas)
 
     def save(self, *args, **kwargs):
         from django.core.exceptions import ValidationError
         # Validaciones para evitar inconsistencias
         if self.cantidad_cajas < 0:
             raise ValidationError('No puedes tener cajas negativas en el lote.')
-        if self.peso_neto is not None and self.peso_neto < 0:
-            raise ValidationError('No puedes tener peso neto negativo en el lote.')
-        # Si el peso_neto no está definido, lo calcula
-        if self.peso_neto is None:
-            self.peso_neto = self.peso_bruto - (self.box_type.peso_caja * self.cantidad_cajas + (self.pallet_type.peso_pallet if self.pallet_type else 0))
+            
+        # Validaciones específicas según el tipo de producto
+        if self.producto:
+            if self.producto.tipo_producto == 'palta':
+                # Validaciones para productos tipo palta (por peso)
+                if self.peso_neto is not None and self.peso_neto < 0:
+                    raise ValidationError('No puedes tener peso neto negativo en el lote.')
+                # Si el peso_neto no está definido, lo calcula
+                if self.peso_neto is None:
+                    self.peso_neto = self.peso_bruto - (self.box_type.peso_caja * self.cantidad_cajas + (self.pallet_type.peso_pallet if self.pallet_type else 0))
+            elif self.producto.tipo_producto == 'otro':
+                # Validaciones para productos tipo otro (por unidades)
+                if self.cantidad_unidades < 0:
+                    raise ValidationError('No puedes tener unidades negativas en el lote.')
+                if self.unidades_por_caja <= 0 and self.cantidad_cajas > 0:
+                    raise ValidationError('Debes especificar cuántas unidades hay por caja.')
+                # Actualizar cantidad_unidades basado en cajas si es necesario
+                if self.unidades_por_caja > 0 and self.cantidad_unidades == 0:
+                    self.cantidad_unidades = self.cantidad_cajas * self.unidades_por_caja
+        
         if not self.qr_code:
             import uuid
             self.qr_code = f"LOT-{uuid.uuid4()}"
+            
         # Actualiza estado_lote automáticamente
         if self.cantidad_cajas == 0:
             self.estado_lote = 'agotado'
         elif self.cantidad_cajas > 0 and self.estado_lote == 'agotado':
             self.estado_lote = 'activo'
+            
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -140,7 +179,11 @@ class StockReservation(BaseModel):
     ]
     lote = models.ForeignKey('FruitLot', on_delete=models.CASCADE, related_name='reservas')
     usuario = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE)
-    cantidad_kg = models.DecimalField(max_digits=7, decimal_places=2)
+    # Campos para productos tipo palta (por peso)
+    cantidad_kg = models.DecimalField(max_digits=7, decimal_places=2, default=0)
+    # Campos para productos tipo otro (por unidades)
+    cantidad_unidades = models.PositiveIntegerField(default=0, help_text="Cantidad de unidades reservadas (para productos que no son palta)")
+    # Común para ambos tipos
     cantidad_cajas = models.PositiveIntegerField(default=0)
     # Cliente frecuente (opcional)
     cliente = models.ForeignKey('sales.Customer', on_delete=models.SET_NULL, null=True, blank=True)
@@ -159,7 +202,10 @@ class StockReservation(BaseModel):
 
     def __str__(self):
         cliente_str = self.cliente.nombre if self.cliente else (self.nombre_cliente or '')
-        return f"Reserva {self.id} - Lote {self.lote_id} - {self.cantidad_kg}kg/{self.cantidad_cajas}cajas - {self.estado} ({cliente_str})"
+        if self.lote.producto and self.lote.producto.tipo_producto == 'palta':
+            return f"Reserva {self.id} - Lote {self.lote_id} - {self.cantidad_kg}kg/{self.cantidad_cajas}cajas - {self.estado} ({cliente_str})"
+        else:
+            return f"Reserva {self.id} - Lote {self.lote_id} - {self.cantidad_unidades}unidades/{self.cantidad_cajas}cajas - {self.estado} ({cliente_str})"
 
 class Supplier(BaseModel):
     uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)

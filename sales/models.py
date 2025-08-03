@@ -138,9 +138,16 @@ class Sale(BaseModel):
     lote = models.ForeignKey('inventory.FruitLot', on_delete=models.CASCADE)
     cliente = models.ForeignKey('Customer', on_delete=models.SET_NULL, null=True, blank=True, related_name='sales')
     vendedor = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE)
-    peso_vendido = models.DecimalField(max_digits=7, decimal_places=2)
+    # Campos para productos tipo palta (por peso)
+    peso_vendido = models.DecimalField(max_digits=7, decimal_places=2, default=0, help_text="Peso vendido en kg (para productos tipo palta)")
+    precio_kg = models.DecimalField(max_digits=7, decimal_places=2, default=0, help_text="Precio por kg (para productos tipo palta)")
+    
+    # Campos para productos tipo otro (por unidades)
+    unidades_vendidas = models.PositiveIntegerField(default=0, help_text="Cantidad de unidades vendidas (para productos que no son palta)")
+    precio_unidad = models.DecimalField(max_digits=7, decimal_places=2, default=0, help_text="Precio por unidad (para productos que no son palta)")
+    
+    # Común para ambos tipos
     cajas_vendidas = models.PositiveIntegerField(default=0)
-    precio_kg = models.DecimalField(max_digits=7, decimal_places=2)
     total = models.DecimalField(max_digits=10, decimal_places=2)
     metodo_pago = models.CharField(max_length=20, choices=METODO_PAGO_CHOICES)
     comprobante = models.ImageField(upload_to="sales/comprobantes/", blank=True, null=True)
@@ -198,7 +205,13 @@ class Sale(BaseModel):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"Venta {self.codigo_venta or self.id} - Lote {self.lote_id} - Cliente: {self.cliente.nombre if self.cliente else 'Ocasional'}"
+        cliente_str = self.cliente.nombre if self.cliente else 'Ocasional'
+        
+        # Mostrar información según el tipo de producto
+        if self.lote.producto and self.lote.producto.tipo_producto == 'palta':
+            return f"Venta {self.codigo_venta or self.id} - Lote {self.lote_id} - {self.peso_vendido}kg - Cliente: {cliente_str}"
+        else:
+            return f"Venta {self.codigo_venta or self.id} - Lote {self.lote_id} - {self.unidades_vendidas}unidades - Cliente: {cliente_str}"
 
 class SalePending(BaseModel):
     uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
@@ -213,7 +226,14 @@ class SalePending(BaseModel):
     # Campos básicos de la venta pendiente
     lote = models.ForeignKey('inventory.FruitLot', on_delete=models.CASCADE)
     cliente = models.ForeignKey(Customer, on_delete=models.SET_NULL, null=True, blank=True)
-    cantidad_kg = models.DecimalField(max_digits=7, decimal_places=2)
+    
+    # Campos para productos tipo palta (por peso)
+    cantidad_kg = models.DecimalField(max_digits=7, decimal_places=2, default=0, help_text="Cantidad en kg (para productos tipo palta)")
+    
+    # Campos para productos tipo otro (por unidades)
+    cantidad_unidades = models.PositiveIntegerField(default=0, help_text="Cantidad de unidades (para productos que no son palta)")
+    
+    # Común para ambos tipos
     cantidad_cajas = models.PositiveIntegerField(default=0)
     
     # Datos básicos del cliente ocasional
@@ -239,4 +259,9 @@ class SalePending(BaseModel):
 
     def __str__(self):
         cliente_str = self.cliente.nombre if self.cliente else (self.nombre_cliente or '')
-        return f"Pre-reserva {self.id} - Lote {self.lote_id} - {self.cantidad_kg}kg/{self.cantidad_cajas}cajas - {self.estado} ({cliente_str})"
+        
+        # Mostrar información según el tipo de producto
+        if self.lote.producto and self.lote.producto.tipo_producto == 'palta':
+            return f"Pre-reserva {self.id} - Lote {self.lote_id} - {self.cantidad_kg}kg/{self.cantidad_cajas}cajas - {self.estado} ({cliente_str})"
+        else:
+            return f"Pre-reserva {self.id} - Lote {self.lote_id} - {self.cantidad_unidades}unidades/{self.cantidad_cajas}cajas - {self.estado} ({cliente_str})"
