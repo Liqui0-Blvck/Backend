@@ -1,11 +1,13 @@
-from rest_framework import viewsets
+from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
 from django.utils import timezone
 from django.db import transaction
-from .models import Shift
-from .serializers import ShiftSerializer
+from django.shortcuts import get_object_or_404
+from .models import Shift, ShiftExpense
+from .serializers import ShiftSerializer, ShiftExpenseSerializer
+from .serializers_detail import ShiftDetailSerializer
 from rest_framework.permissions import IsAuthenticated
 from core.permissions import IsSameBusiness
 
@@ -33,6 +35,106 @@ class ShiftViewSet(viewsets.ModelViewSet):
         if perfil is None:
             raise ValidationError({'detail': 'Perfil no encontrado para el usuario'})
         serializer.save(business=perfil.business)
+
+
+class ShiftExpenseViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar los gastos incurridos durante un turno.
+    Permite crear, listar, actualizar y eliminar gastos asociados a un turno específico.
+    """
+    serializer_class = ShiftExpenseSerializer
+    permission_classes = [IsAuthenticated, IsSameBusiness]
+    
+    def get_queryset(self):
+        user = self.request.user
+        perfil = getattr(user, 'perfil', None)
+        if perfil is None:
+            return ShiftExpense.objects.none()
+        
+        # Filtrar por turno si se especifica
+        shift_id = self.request.query_params.get('shift', None)
+        queryset = ShiftExpense.objects.filter(business=perfil.business)
+        
+        if shift_id:
+            queryset = queryset.filter(shift_id=shift_id)
+            
+        return queryset.order_by('-fecha')
+    
+    def perform_create(self, serializer):
+        user = self.request.user
+        perfil = getattr(user, 'perfil', None)
+        if perfil is None:
+            raise ValidationError({'detail': 'Perfil no encontrado para el usuario'})
+        
+        # Verificar que el turno exista y pertenezca al mismo negocio
+        shift_id = self.request.data.get('shift')
+        if shift_id:
+            try:
+                shift = Shift.objects.get(pk=shift_id, business=perfil.business)
+            except Shift.DoesNotExist:
+                raise ValidationError({'detail': 'Turno no encontrado o no pertenece a este negocio'})
+        
+        # Por defecto, el usuario que registra el gasto es el usuario actual
+        serializer.save(
+            business=perfil.business,
+            registrado_por=user
+        )
+    
+    def perform_update(self, serializer):
+        user = self.request.user
+        perfil = getattr(user, 'perfil', None)
+        if perfil is None:
+            raise ValidationError({'detail': 'Perfil no encontrado para el usuario'})
+            
+        # Verificar que el turno exista y pertenezca al mismo negocio
+        shift_id = self.request.data.get('shift')
+        if shift_id:
+            try:
+                shift = Shift.objects.get(pk=shift_id, business=perfil.business)
+            except Shift.DoesNotExist:
+                raise ValidationError({'detail': 'Turno no encontrado o no pertenece a este negocio'})
+        
+        serializer.save(business=perfil.business)
+    
+    @action(detail=False, methods=['get'])
+    def por_turno(self, request):
+        """
+        Devuelve todos los gastos asociados a un turno específico.
+        """
+        user = self.request.user
+        perfil = getattr(user, 'perfil', None)
+        if perfil is None:
+            return Response({'detail': 'Perfil no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+        
+        shift_id = request.query_params.get('shift_id', None)
+        if not shift_id:
+            return Response({'detail': 'Se requiere el ID del turno.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            shift = Shift.objects.get(pk=shift_id, business=perfil.business)
+        except Shift.DoesNotExist:
+            return Response({'detail': 'Turno no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+        
+        gastos = ShiftExpense.objects.filter(shift=shift).order_by('-fecha')
+        serializer = self.get_serializer(gastos, many=True)
+        
+        # Calcular totales
+        total_gastos = sum(float(gasto.monto) for gasto in gastos)
+        
+        # Agrupar por categoría
+        categorias = {}
+        for gasto in gastos:
+            categoria = gasto.get_categoria_display()
+            if categoria not in categorias:
+                categorias[categoria] = 0
+            categorias[categoria] += float(gasto.monto)
+        
+        return Response({
+            'gastos': serializer.data,
+            'total_gastos': total_gastos,
+            'gastos_por_categoria': [{'categoria': k, 'monto': v} for k, v in categorias.items()],
+            'cantidad_gastos': len(gastos)
+        })
     
     @action(detail=False, methods=['get'])
     def estado(self, request):
@@ -144,3 +246,25 @@ class ShiftViewSet(viewsets.ModelViewSet):
         turno.save()
         
         return Response(ShiftSerializer(turno).data)
+        
+    @action(detail=True, methods=['get'])
+    def detalle(self, request, pk=None):
+        """
+        Devuelve información detallada sobre un turno específico, incluyendo:
+        - Información básica del turno
+        - Resumen de ventas
+        - Movimientos de inventario
+        - Transacciones financieras
+        """
+        user = self.request.user
+        perfil = getattr(user, 'perfil', None)
+        if perfil is None:
+            return Response({'detail': 'Perfil no encontrado.'}, status=404)
+        
+        try:
+            turno = Shift.objects.get(pk=pk, business=perfil.business)
+        except Shift.DoesNotExist:
+            return Response({'detail': 'Turno no encontrado.'}, status=404)
+        
+        serializer = ShiftDetailSerializer(turno)
+        return Response(serializer.data)
