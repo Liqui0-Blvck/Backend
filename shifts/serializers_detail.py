@@ -18,12 +18,12 @@ class BoxRefillSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = BoxRefill
-        fields = ['id', 'shift', 'fruit_lot', 'fruit_lot_info', 'cantidad_cajas', 
+        fields = ['id', 'shift', 'fruit_lot', 'fruit_lot_info', 'cajas_relleno', 
                  'motivo', 'usuario', 'usuario_nombre', 'fecha', 'business']
     
     def get_usuario_nombre(self, obj):
         if obj.usuario:
-            return f"{obj.usuario.first_name} {obj.usuario.last_name}".strip() or obj.usuario.username
+            return f"{obj.usuario.first_name} {obj.usuario.last_name}".strip()
         return None
     
     def get_fruit_lot_info(self, obj):
@@ -67,34 +67,27 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
     # Transacciones financieras
     transacciones_financieras = serializers.SerializerMethodField()
     
-    # Actividad de usuarios
-    actividad_usuarios = serializers.SerializerMethodField()
-    
-    # Resumen de actividad por usuario
-    resumen_por_usuario = serializers.SerializerMethodField()
-    
-    # Notificaciones generadas
-    notificaciones = serializers.SerializerMethodField()
     
     class Meta:
         model = Shift
         fields = [
-            'id', 'business', 'usuario_abre', 'usuario_cierra', 
+            'uid', 'business', 'usuario_abre', 'usuario_cierra', 
             'usuario_abre_nombre', 'usuario_cierra_nombre',
             'fecha_apertura', 'fecha_cierre', 'estado', 'motivo_diferencia',
-            'duracion_minutos', 'ventas_resumen', 'ventas_detalle', 'ventas_pendientes',
-            'movimientos_inventario', 'recepciones', 'rellenos_cajas', 'gastos',
-            'transacciones_financieras', 'actividad_usuarios', 'resumen_por_usuario', 'notificaciones'
+            'duracion_minutos', 'ventas_resumen', 'ventas_detalle', 
+            'ventas_pendientes', 'gastos',
+            'movimientos_inventario', 'recepciones', 'rellenos_cajas', 
+            'transacciones_financieras'
         ]
     
     def get_usuario_abre_nombre(self, obj):
         if obj.usuario_abre:
-            return f"{obj.usuario_abre.first_name} {obj.usuario_abre.last_name}".strip() or obj.usuario_abre.username
+            return f"{obj.usuario_abre.first_name} {obj.usuario_abre.last_name}".strip()
         return None
     
     def get_usuario_cierra_nombre(self, obj):
         if obj.usuario_cierra:
-            return f"{obj.usuario_cierra.first_name} {obj.usuario_cierra.last_name}".strip() or obj.usuario_cierra.username
+            return f"{obj.usuario_cierra.first_name} {obj.usuario_cierra.last_name}".strip()
         return None
     
     def get_duracion_minutos(self, obj):
@@ -119,35 +112,34 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
         # Obtener todas las ventas realizadas durante el turno
         ventas = Sale.objects.filter(
             business=obj.business,
-            fecha_venta__gte=fecha_inicio,
-            fecha_venta__lte=fecha_fin
+            created_at__gte=fecha_inicio,
+            created_at__lte=fecha_fin
         )
         
         # Total de ventas
         total_ventas = ventas.count()
         monto_total = ventas.aggregate(total=Sum('total'))['total'] or 0
-        total_kg = ventas.aggregate(total_kg=Sum('cantidad_kg'))['total_kg'] or 0
-        total_cajas = ventas.aggregate(total_cajas=Sum('cantidad_cajas'))['total_cajas'] or 0
+        total_kg = ventas.aggregate(total_kg=Sum('peso_vendido'))['total_kg'] or 0
+        total_cajas = ventas.aggregate(total_cajas=Sum('cajas_vendidas'))['total_cajas'] or 0
         
         # Desglose por método de pago
         ventas_por_metodo = list(ventas.values('metodo_pago').annotate(
             cantidad=Count('id'),
             monto=Sum('total'),
-            kg=Sum('cantidad_kg'),
-            cajas=Sum('cantidad_cajas')
+            kg=Sum('peso_vendido'),
+            cajas=Sum('cajas_vendidas')
         ))
         
         # Ventas por vendedor
         ventas_por_vendedor = list(ventas.values(
-            'vendedor__id', 
-            'vendedor__username',
+            'vendedor__id',
             'vendedor__first_name',
             'vendedor__last_name'
         ).annotate(
             cantidad=Count('id'),
             monto=Sum('total'),
-            kg=Sum('cantidad_kg'),
-            cajas=Sum('cantidad_cajas')
+            kg=Sum('peso_vendido'),
+            cajas=Sum('cajas_vendidas')
         ))
         
         # Productos más vendidos
@@ -159,10 +151,10 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
                     productos_vendidos.append({
                         'id': producto.id,
                         'nombre': producto.nombre,
-                        'cantidad_kg': venta.cantidad_kg,
-                        'cantidad_cajas': venta.cantidad_cajas,
+                        'peso_vendido': venta.peso_vendido,
+                        'cajas_vendidas': venta.cajas_vendidas,
                         'monto': venta.total,
-                        'fecha_venta': venta.fecha_venta,
+                        'fecha_venta': venta.created_at,
                         'cliente': venta.cliente.nombre if venta.cliente else 'Cliente ocasional'
                     })
         
@@ -174,19 +166,19 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
                 productos_agrupados[key] = {
                     'id': p['id'],
                     'nombre': p['nombre'],
-                    'cantidad_kg': 0,
-                    'cantidad_cajas': 0,
+                    'peso_vendido': 0,
+                    'cajas_vendidas': 0,
                     'monto': 0,
                     'ventas': []
                 }
-            productos_agrupados[key]['cantidad_kg'] += p['cantidad_kg']
-            productos_agrupados[key]['cantidad_cajas'] += p['cantidad_cajas']
+            productos_agrupados[key]['peso_vendido'] += p['peso_vendido']
+            productos_agrupados[key]['cajas_vendidas'] += p['cajas_vendidas']
             productos_agrupados[key]['monto'] += p['monto']
             productos_agrupados[key]['ventas'].append({
                 'fecha': p['fecha_venta'],
                 'cliente': p['cliente'],
-                'kg': p['cantidad_kg'],
-                'cajas': p['cantidad_cajas'],
+                'peso_vendido': p['peso_vendido'],
+                'cajas_vendidas': p['cajas_vendidas'],
                 'monto': p['monto']
             })
         
@@ -215,9 +207,9 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
         # Obtener todas las ventas realizadas durante el turno
         ventas = Sale.objects.filter(
             business=obj.business,
-            fecha_venta__gte=fecha_inicio,
-            fecha_venta__lte=fecha_fin
-        ).order_by('-fecha_venta')
+            created_at__gte=fecha_inicio,
+            created_at__lte=fecha_fin
+        ).order_by('-created_at')
         
         resultado = []
         for venta in ventas:
@@ -239,8 +231,7 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
             if venta.vendedor:
                 vendedor_info = {
                     'id': venta.vendedor.id,
-                    'username': venta.vendedor.username,
-                    'nombre': f"{venta.vendedor.first_name} {venta.vendedor.last_name}".strip() or venta.vendedor.username
+                    'nombre': f"{venta.vendedor.first_name} {venta.vendedor.last_name}".strip()
                 }
             
             # Obtener información del cliente
@@ -256,9 +247,9 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
             # Construir el detalle de la venta
             detalle_venta = {
                 'id': venta.id,
-                'fecha_venta': venta.fecha_venta,
-                'cantidad_kg': venta.cantidad_kg,
-                'cantidad_cajas': venta.cantidad_cajas,
+                'fecha_venta': venta.created_at,
+                'peso_vendido': venta.peso_vendido,
+                'cajas_vendidas': venta.cajas_vendidas,
                 'precio_kg': venta.precio_kg,
                 'total': venta.total,
                 'metodo_pago': venta.metodo_pago,
@@ -283,9 +274,9 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
         # Obtener todas las ventas pendientes creadas durante el turno
         ventas_pendientes = SalePending.objects.filter(
             business=obj.business,
-            fecha_creacion__gte=fecha_inicio,
-            fecha_creacion__lte=fecha_fin
-        ).order_by('-fecha_creacion')
+            created_at__gte=fecha_inicio,
+            created_at__lte=fecha_fin
+        ).order_by('-created_at')
         
         resultado = []
         for venta in ventas_pendientes:
@@ -307,8 +298,7 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
             if hasattr(venta, 'vendedor') and venta.vendedor:
                 vendedor_info = {
                     'id': venta.vendedor.id,
-                    'username': venta.vendedor.username,
-                    'nombre': f"{venta.vendedor.first_name} {venta.vendedor.last_name}".strip() or venta.vendedor.username
+                    'nombre': f"{venta.vendedor.first_name} {venta.vendedor.last_name}".strip()
                 }
             
             # Obtener información del cliente
@@ -352,8 +342,8 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
         # Obtener todas las ventas que afectaron el inventario
         ventas = Sale.objects.filter(
             business=obj.business,
-            fecha_venta__gte=fecha_inicio,
-            fecha_venta__lte=fecha_fin
+            created_at__gte=fecha_inicio,
+            created_at__lte=fecha_fin
         )
         
         # Calcular movimientos de inventario por ventas
@@ -371,7 +361,7 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
                     'categoria': getattr(venta.lote, 'categoria', None),
                     'cantidad_kg': venta.cantidad_kg,
                     'cantidad_cajas': venta.cantidad_cajas,
-                    'fecha': venta.fecha_venta,
+                    'fecha': venta.created_at,
                     'vendedor': f"{venta.vendedor.first_name} {venta.vendedor.last_name}".strip() if venta.vendedor else 'Sin vendedor',
                     'cliente': venta.cliente.nombre if venta.cliente else 'Cliente ocasional'
                 })
@@ -452,16 +442,14 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
             if hasattr(recepcion, 'receptor') and recepcion.receptor:
                 receptor_info = {
                     'id': recepcion.receptor.id,
-                    'username': recepcion.receptor.username,
-                    'nombre': f"{recepcion.receptor.first_name} {recepcion.receptor.last_name}".strip() or recepcion.receptor.username
+                    'nombre': f"{recepcion.receptor.first_name} {recepcion.receptor.last_name}".strip()
                 }
             
             revisor_info = None
             if hasattr(recepcion, 'revisor') and recepcion.revisor:
                 revisor_info = {
                     'id': recepcion.revisor.id,
-                    'username': recepcion.revisor.username,
-                    'nombre': f"{recepcion.revisor.first_name} {recepcion.revisor.last_name}".strip() or recepcion.revisor.username
+                    'nombre': f"{recepcion.revisor.first_name} {recepcion.revisor.last_name}".strip()
                 }
             
             # Construir el detalle de la recepción
@@ -524,6 +512,7 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
         total_gastos = sum(float(gasto.monto) for gasto in gastos)
         
         return {
+            'saldo': obj.saldo_inicial,
             'gastos': gastos_data,
             'total_gastos': total_gastos,
             'gastos_por_categoria': [{'categoria': k, 'monto': v} for k, v in categorias.items()],
@@ -542,8 +531,8 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
         # Obtener todas las ventas realizadas durante el turno agrupadas por vendedor
         ventas_por_usuario = Sale.objects.filter(
             business=obj.business,
-            fecha_venta__gte=fecha_inicio,
-            fecha_venta__lte=fecha_fin
+            created_at__gte=fecha_inicio,
+            created_at__lte=fecha_fin
         ).values(
             'vendedor__id',
             'vendedor__username',
@@ -616,162 +605,6 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
             'total_usuarios_activos': len(usuarios_lista)
         }
         
-    def get_resumen_por_usuario(self, obj):
-        """
-        Obtiene un resumen detallado de la actividad de cada usuario durante el turno.
-        Incluye ventas, gastos, rellenos de cajas y otras actividades relevantes.
-        """
-        # Definir el rango de fechas del turno
-        fecha_inicio = obj.fecha_apertura
-        fecha_fin = obj.fecha_cierre or timezone.now()
-        
-        # Obtener todos los usuarios que han tenido actividad en el turno
-        usuarios_activos = set()
-        
-        # Usuarios que han realizado ventas
-        ventas = Sale.objects.filter(
-            business=obj.business,
-            fecha_venta__gte=fecha_inicio,
-            fecha_venta__lte=fecha_fin
-        )
-        for venta in ventas:
-            if venta.vendedor:
-                usuarios_activos.add(venta.vendedor.id)
-        
-        # Usuarios que han registrado gastos
-        gastos = ShiftExpense.objects.filter(shift=obj)
-        for gasto in gastos:
-            if gasto.registrado_por:
-                usuarios_activos.add(gasto.registrado_por.id)
-        
-        # Usuarios que han registrado rellenos de cajas
-        rellenos = BoxRefill.objects.filter(shift=obj)
-        for relleno in rellenos:
-            if relleno.usuario:
-                usuarios_activos.add(relleno.usuario.id)
-        
-        # Construir resumen para cada usuario
-        resumen_usuarios = []
-        for usuario_id in usuarios_activos:
-            try:
-                usuario = CustomUser.objects.get(pk=usuario_id)
-                
-                # Ventas del usuario
-                ventas_usuario = ventas.filter(vendedor=usuario)
-                total_ventas = ventas_usuario.aggregate(total=Sum('total'))['total'] or 0
-                cantidad_ventas = ventas_usuario.count()
-                
-                # Ventas por método de pago
-                ventas_por_metodo = list(ventas_usuario.values('metodo_pago').annotate(
-                    cantidad=Count('id'),
-                    monto=Sum('total')
-                ))
-                
-                # Formatear los métodos de pago para mejor legibilidad
-                for metodo in ventas_por_metodo:
-                    metodo_id = metodo['metodo_pago']
-                    for choice in Sale.METODO_PAGO_CHOICES:
-                        if choice[0] == metodo_id:
-                            metodo['metodo_nombre'] = choice[1]
-                            break
-                
-                # Gastos registrados por el usuario
-                gastos_usuario = gastos.filter(registrado_por=usuario)
-                total_gastos = gastos_usuario.aggregate(total=Sum('monto'))['total'] or 0
-                
-                # Gastos por categoría
-                gastos_por_categoria = list(gastos_usuario.values('categoria').annotate(
-                    cantidad=Count('id'),
-                    monto=Sum('monto')
-                ))
-                
-                # Formatear las categorías para mejor legibilidad
-                for categoria in gastos_por_categoria:
-                    categoria_id = categoria['categoria']
-                    for choice in ShiftExpense.CATEGORIA_CHOICES:
-                        if choice[0] == categoria_id:
-                            categoria['categoria_nombre'] = choice[1]
-                            break
-                
-                # Rellenos realizados por el usuario
-                rellenos_usuario = rellenos.filter(usuario=usuario)
-                total_rellenos = rellenos_usuario.aggregate(total=Sum('cantidad_cajas'))['total'] or 0
-                
-                # Construir resumen del usuario
-                resumen_usuario = {
-                    'usuario': {
-                        'id': usuario.id,
-                        'nombre': f"{usuario.first_name} {usuario.last_name}".strip() or usuario.username,
-                        'email': usuario.email,
-                        'roles': [group.name for group in usuario.groups.all()]
-                    },
-                    'ventas': {
-                        'cantidad': cantidad_ventas,
-                        'total': float(total_ventas),
-                        'por_metodo': ventas_por_metodo,
-                        'detalle': [
-                            {
-                                'id': venta.id,
-                                'fecha': venta.fecha_venta,
-                                'total': float(venta.total),
-                                'metodo_pago': venta.get_metodo_pago_display(),
-                                'cliente': venta.cliente.nombre if venta.cliente else 'Cliente ocasional',
-                                'productos': [
-                                    {
-                                        'nombre': item.fruit_lot.producto.nombre if hasattr(item, 'fruit_lot') and hasattr(item.fruit_lot, 'producto') else 'Producto no especificado',
-                                        'cantidad_kg': float(item.cantidad_kg) if hasattr(item, 'cantidad_kg') else 0,
-                                        'precio_kg': float(item.precio_kg) if hasattr(item, 'precio_kg') else 0,
-                                        'subtotal': float(item.subtotal) if hasattr(item, 'subtotal') else 0
-                                    } for item in venta.items.all()[:5]  # Limitar a 5 items por venta
-                                ] if hasattr(venta, 'items') else []
-                            } for venta in ventas_usuario[:10]  # Limitar a 10 ventas para no sobrecargar
-                        ]
-                    },
-                    'gastos': {
-                        'cantidad': gastos_usuario.count(),
-                        'total': float(total_gastos) if total_gastos else 0,
-                        'por_categoria': gastos_por_categoria,
-                        'detalle': [
-                            {
-                                'id': gasto.id,
-                                'descripcion': gasto.descripcion,
-                                'monto': float(gasto.monto),
-                                'categoria': gasto.get_categoria_display(),
-                                'fecha': gasto.fecha
-                            } for gasto in gastos_usuario[:10]  # Limitar a 10 gastos
-                        ]
-                    },
-                    'rellenos_cajas': {
-                        'cantidad': rellenos_usuario.count(),
-                        'total_cajas': total_rellenos if total_rellenos else 0,
-                        'detalle': [
-                            {
-                                'id': relleno.id,
-                                'fecha': relleno.fecha,
-                                'cantidad_cajas': relleno.cantidad_cajas,
-                                'fruta': relleno.fruit_lot.producto.nombre if hasattr(relleno, 'fruit_lot') and hasattr(relleno.fruit_lot, 'producto') else 'No especificada'
-                            } for relleno in rellenos_usuario[:10]  # Limitar a 10 rellenos
-                        ]
-                    },
-                    'balance': {
-                        'ingresos': float(total_ventas),
-                        'gastos': float(total_gastos) if total_gastos else 0,
-                        'neto': float(total_ventas) - (float(total_gastos) if total_gastos else 0)
-                    }
-                }
-                
-                resumen_usuarios.append(resumen_usuario)
-            except CustomUser.DoesNotExist:
-                continue
-        
-        # Ordenar por total de ventas (de mayor a menor)
-        resumen_usuarios.sort(key=lambda x: x['ventas']['total'], reverse=True)
-        
-        return {
-            'cantidad_usuarios': len(resumen_usuarios),
-            'usuarios': resumen_usuarios
-        }
-        
     def get_transacciones_financieras(self, obj):
         """
         Obtiene un resumen detallado de todas las transacciones financieras durante el turno.
@@ -783,8 +616,8 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
         # Obtener todas las ventas con sus pagos
         ventas = Sale.objects.filter(
             business=obj.business,
-            fecha_venta__gte=fecha_inicio,
-            fecha_venta__lte=fecha_fin
+            created_at__gte=fecha_inicio,
+            created_at__lte=fecha_fin
         )
         
         # Calcular ingresos por ventas
@@ -852,104 +685,53 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
             'gastos_por_categoria': gastos_por_categoria,
             'total_cajas_relleno': total_cajas_relleno,
             'balance_caja': balance_caja,
-            'usuarios_activos': usuarios_activos,
             'detalle_transacciones': detalle_transacciones,
         }
         
-        # Agregar ventas por usuario
-        for venta in ventas_por_usuario:
-            user_id = venta['vendedor__id']
-            if user_id not in usuarios_activos:
-                usuarios_activos[user_id] = {
-                    'id': user_id,
-                    'username': venta['vendedor__username'],
-                    'nombre': f"{venta['vendedor__first_name']} {venta['vendedor__last_name']}".strip() or venta['vendedor__username'],
-                    'ventas_count': 0,
-                    'ventas_monto': 0,
-                    'ventas_kg': 0,
-                    'ventas_cajas': 0,
-                    'rellenos_count': 0,
-                    'rellenos_cajas': 0
-                }
-            usuarios_activos[user_id]['ventas_count'] = venta['ventas_count']
-            usuarios_activos[user_id]['ventas_monto'] = venta['ventas_monto']
-            usuarios_activos[user_id]['ventas_kg'] = venta['ventas_kg']
-            usuarios_activos[user_id]['ventas_cajas'] = venta['ventas_cajas']
+        # # Agregar ventas por usuario
+        # for venta in ventas_por_usuario:
+        #     user_id = venta['vendedor__id']
+        #     if user_id not in usuarios_activos:
+        #         usuarios_activos[user_id] = {
+        #             'id': user_id,
+        #             'username': venta['vendedor__username'],
+        #             'nombre': f"{venta['vendedor__first_name']} {venta['vendedor__last_name']}".strip() or venta['vendedor__username'],
+        #             'ventas_count': 0,
+        #             'ventas_monto': 0,
+        #             'ventas_kg': 0,
+        #             'ventas_cajas': 0,
+        #             'rellenos_count': 0,
+        #             'rellenos_cajas': 0
+        #         }
+        #     usuarios_activos[user_id]['ventas_count'] = venta['ventas_count']
+        #     usuarios_activos[user_id]['ventas_monto'] = venta['ventas_monto']
+        #     usuarios_activos[user_id]['ventas_kg'] = venta['ventas_kg']
+        #     usuarios_activos[user_id]['ventas_cajas'] = venta['ventas_cajas']
         
-        # Agregar rellenos por usuario
-        for relleno in rellenos_por_usuario:
-            user_id = relleno['usuario__id']
-            if user_id not in usuarios_activos:
-                usuarios_activos[user_id] = {
-                    'id': user_id,
-                    'username': relleno['usuario__username'],
-                    'nombre': f"{relleno['usuario__first_name']} {relleno['usuario__last_name']}".strip() or relleno['usuario__username'],
-                    'ventas_count': 0,
-                    'ventas_monto': 0,
-                    'ventas_kg': 0,
-                    'ventas_cajas': 0,
-                    'rellenos_count': 0,
-                    'rellenos_cajas': 0
-                }
-            usuarios_activos[user_id]['rellenos_count'] = relleno['rellenos_count']
-            usuarios_activos[user_id]['rellenos_cajas'] = relleno['rellenos_cajas']
+        # # Agregar rellenos por usuario
+        # for relleno in rellenos_por_usuario:
+        #     user_id = relleno['usuario__id']
+        #     if user_id not in usuarios_activos:
+        #         usuarios_activos[user_id] = {
+        #             'id': user_id,
+        #             'username': relleno['usuario__username'],
+        #             'nombre': f"{relleno['usuario__first_name']} {relleno['usuario__last_name']}".strip() or relleno['usuario__username'],
+        #             'ventas_count': 0,
+        #             'ventas_monto': 0,
+        #             'ventas_kg': 0,
+        #             'ventas_cajas': 0,
+        #             'rellenos_count': 0,
+        #             'rellenos_cajas': 0
+        #         }
+        #     usuarios_activos[user_id]['rellenos_count'] = relleno['rellenos_count']
+        #     usuarios_activos[user_id]['rellenos_cajas'] = relleno['rellenos_cajas']
         
-        # Convertir a lista y ordenar por actividad total
-        usuarios_lista = list(usuarios_activos.values())
-        usuarios_lista.sort(key=lambda x: (x['ventas_count'] + x['rellenos_count']), reverse=True)
+        # # Convertir a lista y ordenar por actividad total
+        # usuarios_lista = list(usuarios_activos.values())
+        # usuarios_lista.sort(key=lambda x: (x['ventas_count'] + x['rellenos_count']), reverse=True)
         
-        return {
-            'usuarios_activos': usuarios_lista,
-            'total_usuarios_activos': len(usuarios_lista)
-        }
-        
-    def get_notificaciones(self, obj):
-        """
-        Obtiene todas las notificaciones generadas durante el turno.
-        """
-        # Definir el rango de fechas del turno
-        fecha_inicio = obj.fecha_apertura
-        fecha_fin = obj.fecha_cierre or timezone.now()
-        
-        # Obtener todas las notificaciones generadas durante el turno
-        notificaciones = Notification.objects.filter(
-            business=obj.business,
-            fecha_creacion__gte=fecha_inicio,
-            fecha_creacion__lte=fecha_fin
-        ).order_by('-fecha_creacion')
-        
-        resultado = []
-        for notificacion in notificaciones:
-            # Obtener información del emisor
-            emisor_info = None
-            if hasattr(notificacion, 'emisor') and notificacion.emisor:
-                emisor_info = {
-                    'id': notificacion.emisor.id,
-                    'username': notificacion.emisor.username,
-                    'nombre': f"{notificacion.emisor.first_name} {notificacion.emisor.last_name}".strip() or notificacion.emisor.username
-                }
-            
-            # Obtener información del receptor
-            receptor_info = None
-            if hasattr(notificacion, 'receptor') and notificacion.receptor:
-                receptor_info = {
-                    'id': notificacion.receptor.id,
-                    'username': notificacion.receptor.username,
-                    'nombre': f"{notificacion.receptor.first_name} {notificacion.receptor.last_name}".strip() or notificacion.receptor.username
-                }
-            
-            # Construir el detalle de la notificación
-            detalle_notificacion = {
-                'id': notificacion.id,
-                'titulo': notificacion.titulo,
-                'mensaje': notificacion.mensaje,
-                'tipo': notificacion.tipo,
-                'fecha_creacion': notificacion.fecha_creacion,
-                'leida': notificacion.leida,
-                'emisor': emisor_info,
-                'receptor': receptor_info
-            }
-            
-            resultado.append(detalle_notificacion)
-        
-        return resultado
+        # return {
+        #     'usuarios_activos': usuarios_lista,
+        #     'total_usuarios_activos': len(usuarios_lista)
+        # }
+     

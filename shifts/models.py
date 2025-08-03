@@ -7,6 +7,11 @@ from simple_history.models import HistoricalRecords
 # No importar modelos de otras apps arriba para evitar ciclos
 
 class Shift(BaseModel):
+    """
+    Modelo para registrar los turnos de trabajo.
+    Permite llevar un control detallado de todos los turnos de trabajo.
+    """
+    uid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     ESTADO_CHOICES = [
         ("abierto", "Abierto"),
         ("cerrado", "Cerrado"),
@@ -22,7 +27,7 @@ class Shift(BaseModel):
     history = HistoricalRecords()
 
     def __str__(self):
-        return f"Turno {self.id} - {self.estado}"
+        return f"Turno {self.uid} - {self.estado}"
     
     @classmethod
     def get_turno_activo(cls, business):
@@ -35,7 +40,7 @@ class BoxRefill(BaseModel):
     Modelo para registrar el descuento de cajas por concepto de relleno durante un turno.
     Solo se puede realizar esta acción si hay un turno activo.
     """
-    shift = models.ForeignKey(Shift, on_delete=models.CASCADE, related_name="box_refills")
+    shift = models.ForeignKey(Shift, on_delete=models.CASCADE, related_name="box_refills", to_field='uid')
     fruit_lot = models.ForeignKey('inventory.FruitLot', on_delete=models.CASCADE, related_name="box_refills")
     cantidad_cajas = models.PositiveIntegerField(help_text="Cantidad de cajas descontadas por relleno")
     motivo = models.TextField(help_text="Motivo del descuento de cajas")
@@ -77,7 +82,7 @@ class ShiftExpense(BaseModel):
         ("otro", "Otro"),
     ]
     
-    shift = models.ForeignKey(Shift, on_delete=models.CASCADE, related_name="expenses")
+    shift = models.ForeignKey(Shift, on_delete=models.CASCADE, related_name="expenses", to_field='uid')
     descripcion = models.CharField(max_length=255, help_text="Descripción del gasto")
     monto = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(0)], help_text="Monto del gasto")
     categoria = models.CharField(max_length=20, choices=CATEGORIA_CHOICES, default="otros", help_text="Categoría del gasto")

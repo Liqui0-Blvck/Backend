@@ -56,7 +56,8 @@ class ShiftExpenseViewSet(viewsets.ModelViewSet):
         queryset = ShiftExpense.objects.filter(business=perfil.business)
         
         if shift_id:
-            queryset = queryset.filter(shift_id=shift_id)
+            # Usar shift__uid en lugar de shift_id para filtrar correctamente por UUID
+            queryset = queryset.filter(shift__uid=shift_id)
             
         return queryset.order_by('-fecha')
     
@@ -70,7 +71,7 @@ class ShiftExpenseViewSet(viewsets.ModelViewSet):
         shift_id = self.request.data.get('shift')
         if shift_id:
             try:
-                shift = Shift.objects.get(pk=shift_id, business=perfil.business)
+                shift = Shift.objects.get(uid=shift_id, business=perfil.business)
             except Shift.DoesNotExist:
                 raise ValidationError({'detail': 'Turno no encontrado o no pertenece a este negocio'})
         
@@ -90,7 +91,7 @@ class ShiftExpenseViewSet(viewsets.ModelViewSet):
         shift_id = self.request.data.get('shift')
         if shift_id:
             try:
-                shift = Shift.objects.get(pk=shift_id, business=perfil.business)
+                shift = Shift.objects.get(uid=shift_id, business=perfil.business)
             except Shift.DoesNotExist:
                 raise ValidationError({'detail': 'Turno no encontrado o no pertenece a este negocio'})
         
@@ -111,14 +112,14 @@ class ShiftExpenseViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Se requiere el ID del turno.'}, status=status.HTTP_400_BAD_REQUEST)
         
         try:
-            shift = Shift.objects.get(pk=shift_id, business=perfil.business)
+            shift = Shift.objects.get(uid=shift_id, business=perfil.business)
         except Shift.DoesNotExist:
             return Response({'detail': 'Turno no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
         
         gastos = ShiftExpense.objects.filter(shift=shift).order_by('-fecha')
         serializer = self.get_serializer(gastos, many=True)
         
-        # Calcular totales
+        # Calcular total de gastos
         total_gastos = sum(float(gasto.monto) for gasto in gastos)
         
         # Agrupar por categoría
@@ -132,8 +133,7 @@ class ShiftExpenseViewSet(viewsets.ModelViewSet):
         return Response({
             'gastos': serializer.data,
             'total_gastos': total_gastos,
-            'gastos_por_categoria': [{'categoria': k, 'monto': v} for k, v in categorias.items()],
-            'cantidad_gastos': len(gastos)
+            'categorias': categorias
         })
     
     @action(detail=False, methods=['get'])
@@ -151,14 +151,14 @@ class ShiftExpenseViewSet(viewsets.ModelViewSet):
         turno_activo = Shift.objects.filter(
             business=perfil.business,
             estado="abierto"
-        ).select_related('usuario_abre').first()
+        ).first()
         
         if turno_activo:
             usuario_nombre = f"{turno_activo.usuario_abre.first_name} {turno_activo.usuario_abre.last_name}".strip() or turno_activo.usuario_abre.username
             es_del_usuario_actual = turno_activo.usuario_abre.id == user.id
             
             turno_data = {
-                'id': turno_activo.id,
+                'id': turno_activo.uid,
                 'usuario_id': turno_activo.usuario_abre.id,
                 'usuario_nombre': usuario_nombre,
                 'fecha_apertura': turno_activo.fecha_apertura,
@@ -216,9 +216,7 @@ class ShiftExpenseViewSet(viewsets.ModelViewSet):
         
         # Preparar respuesta
         respuesta = {
-            'turno_nuevo': ShiftSerializer(turno_nuevo).data,
-            'turnos_cerrados': turnos_cerrados,
-            'turnos_cerrados_cantidad': len(turnos_cerrados)
+            'turno_nuevo': ShiftSerializer(turno_nuevo).data
         }
         
         return Response(respuesta, status=201)
@@ -231,7 +229,7 @@ class ShiftExpenseViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Perfil no encontrado.'}, status=404)
         
         try:
-            turno = Shift.objects.get(pk=pk, business=perfil.business)
+            turno = Shift.objects.get(uid=pk, business=perfil.business)
         except Shift.DoesNotExist:
             return Response({'detail': 'Turno no encontrado.'}, status=404)
         
@@ -261,10 +259,41 @@ class ShiftExpenseViewSet(viewsets.ModelViewSet):
         if perfil is None:
             return Response({'detail': 'Perfil no encontrado.'}, status=404)
         
+        # Intentamos diferentes estrategias para encontrar el turno
         try:
-            turno = Shift.objects.get(pk=pk, business=perfil.business)
-        except Shift.DoesNotExist:
-            return Response({'detail': 'Turno no encontrado.'}, status=404)
-        
-        serializer = ShiftDetailSerializer(turno)
-        return Response(serializer.data)
+            # Estrategia 1: Verificar si el pk es un UUID válido y buscar directamente el turno
+            import uuid
+            try:
+                shift_uid = uuid.UUID(str(pk))
+                turno = Shift.objects.get(uid=shift_uid, business=perfil.business)
+                serializer = ShiftDetailSerializer(turno)
+                return Response(serializer.data)
+            except (ValueError, Shift.DoesNotExist):
+                # No es un UUID válido o no se encontró el turno, continuamos con la siguiente estrategia
+                pass
+            
+            # Estrategia 2: Intentar obtener el gasto y luego su turno asociado
+            try:
+                # Intentar obtener el gasto por su ID primario
+                expense = ShiftExpense.objects.get(pk=pk)
+                
+                # Verificar que el gasto pertenezca al negocio del usuario
+                if expense.business != perfil.business:
+                    return Response({'detail': 'Este gasto no pertenece a su negocio.'}, status=403)
+                
+                # Obtener el turno asociado usando el ID interno
+                turno_id = expense.shift_id
+                turno = Shift.objects.get(pk=turno_id, business=perfil.business)
+                
+                serializer = ShiftDetailSerializer(turno)
+                return Response(serializer.data)
+            except ShiftExpense.DoesNotExist:
+                # No se encontró el gasto, continuamos con la siguiente estrategia
+                pass
+            
+            # Si llegamos aquí, no se pudo encontrar el turno con ninguna estrategia
+            return Response({'detail': 'Turno o gasto no encontrado.'}, status=404)
+            
+        except Exception as e:
+            # Capturar cualquier otro error y devolver un mensaje claro
+            return Response({'detail': f'Error al procesar la solicitud: {str(e)}'}, status=500)
