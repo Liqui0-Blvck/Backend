@@ -33,6 +33,7 @@ ALLOWED_HOSTS = [
     '0.0.0.0',
     'fruitpos.com',
     'www.fruitpos.com',
+    'fruitpos.cl'
     'localhost:5173',
     '127.0.0.1:5173',
 ]
@@ -113,16 +114,44 @@ ASGI_APPLICATION = 'backend.asgi.application'
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.environ.get('POSTGRES_DB', 'fruitpos'),
-        'USER': os.environ.get('POSTGRES_USER', 'fruitpos_user'),
-        'PASSWORD': os.environ.get('POSTGRES_PASSWORD', ''),
-        'HOST': os.environ.get('POSTGRES_HOST', 'db'),
-        'PORT': os.environ.get('POSTGRES_PORT', '5433'),
+# Detectar si estamos en producción basado en la presencia de variables P_
+IS_PRODUCTION = os.environ.get('P_POSTGRES_DB') is not None
+
+if IS_PRODUCTION:
+    # Configuración de producción con prefijo P_
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('P_POSTGRES_DB', 'fruitpos'),
+            'USER': os.environ.get('P_POSTGRES_USER', 'fruitpos_user'),
+            'PASSWORD': os.environ.get('P_POSTGRES_PASSWORD', ''),
+            'HOST': os.environ.get('P_POSTGRES_HOST', 'localhost'),
+            'PORT': os.environ.get('P_POSTGRES_PORT', '5432'),
+            'OPTIONS': {
+                'connect_timeout': 60,
+            },
+        }
     }
-}
+    
+    # Configuraciones adicionales para producción
+    DEBUG = False
+    ALLOWED_HOSTS.extend(['fruitpos.cl', 'www.fruitpos.cl', 'api.fruitpos.cl'])
+    
+else:
+    # Configuración de desarrollo
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('POSTGRES_DB', 'fruitpos'),
+            'USER': os.environ.get('POSTGRES_USER', 'fruitpos_user'),
+            'PASSWORD': os.environ.get('POSTGRES_PASSWORD', ''),
+            'HOST': os.environ.get('POSTGRES_HOST', 'db'),
+            'PORT': os.environ.get('POSTGRES_PORT', '5433'),
+            'OPTIONS': {
+                'connect_timeout': 60,
+            },
+        }
+    }
 
 
 # Password validation
@@ -170,6 +199,8 @@ CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:8000",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://fruitpos.cl",
+    "https://fruitpos.cl",
 ]
 
 # Desactivando completamente la configuración CORS en Django ya que se maneja en Nginx
