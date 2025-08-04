@@ -137,6 +137,66 @@ if IS_PRODUCTION:
     DEBUG = False
     ALLOWED_HOSTS.extend(['fruitpos.cl', 'www.fruitpos.cl', 'api.fruitpos.cl'])
     
+    REDIS_URL = os.environ.get('P_REDIS_URL', 'redis://localhost:6379/0')
+    
+    # Configuraciones adicionales de seguridad para producción
+    SECURE_BROWSER_XSS_FILTER = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_SSL_REDIRECT = os.environ.get('P_SECURE_SSL_REDIRECT', 'True').lower() == 'true'
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    
+    # CORS para producción
+    CORS_ALLOWED_ORIGINS = os.environ.get('P_CORS_ALLOWED_ORIGINS', 'https://fruitpos.cl,https://www.fruitpos.cl').split(',')
+    
+    # DigitalOcean Spaces Configuration para producción
+    USE_SPACES = os.environ.get('P_USE_SPACES', 'True').lower() == 'true'
+    
+    if USE_SPACES:
+        # Configuración de DigitalOcean Spaces
+        AWS_ACCESS_KEY_ID = os.environ.get('P_SPACES_ACCESS_KEY_ID')
+        AWS_SECRET_ACCESS_KEY = os.environ.get('P_SPACES_SECRET_ACCESS_KEY')
+        AWS_STORAGE_BUCKET_NAME = os.environ.get('P_SPACES_BUCKET_NAME', 'fruitpos-storage')
+        AWS_S3_ENDPOINT_URL = os.environ.get('P_SPACES_ENDPOINT_URL', 'https://nyc3.digitaloceanspaces.com')
+        AWS_S3_REGION_NAME = os.environ.get('P_SPACES_REGION', 'nyc3')
+        
+        # Configuración de URLs y paths
+        AWS_S3_CUSTOM_DOMAIN = os.environ.get('P_SPACES_CDN_DOMAIN', f'{AWS_STORAGE_BUCKET_NAME}.nyc3.cdn.digitaloceanspaces.com')
+        AWS_LOCATION = 'fruitpos'  # Carpeta base en el bucket
+        
+        # Configuración de archivos estáticos
+        STATICFILES_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+        STATIC_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/{AWS_LOCATION}/static/'
+        
+        # Configuración de archivos media
+        DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+        MEDIA_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/{AWS_LOCATION}/media/'
+        
+        # Configuraciones adicionales de S3/Spaces
+        AWS_S3_OBJECT_PARAMETERS = {
+            'CacheControl': 'max-age=86400',  # 1 día de cache
+        }
+        AWS_DEFAULT_ACL = 'public-read'
+        AWS_S3_FILE_OVERWRITE = False  # No sobrescribir archivos con el mismo nombre
+        AWS_QUERYSTRING_AUTH = False  # URLs públicas sin query strings de autenticación
+        
+        # Configuración para archivos estáticos específicos
+        AWS_STATIC_LOCATION = 'static'
+        AWS_MEDIA_LOCATION = 'media'
+        
+        # Custom storage classes para separar static y media
+        STATICFILES_STORAGE = 'backend.storage_backends.StaticStorage'
+        DEFAULT_FILE_STORAGE = 'backend.storage_backends.MediaStorage'
+        
+    else:
+        # Fallback a almacenamiento local en producción
+        STATIC_ROOT = os.environ.get('P_STATIC_ROOT', '/var/www/fruitpos/static')
+        MEDIA_ROOT = os.environ.get('P_MEDIA_ROOT', '/var/www/fruitpos/media')
+        MEDIA_URL = '/media/'
+    
 else:
     # Configuración de desarrollo
     DATABASES = {
@@ -152,6 +212,16 @@ else:
             },
         }
     }
+
+    REDIS_URL = os.environ.get('REDIS_URL', 'redis://redis:6379/0')
+    
+    # CORS para desarrollo
+    CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173').split(',')
+    
+    # Archivos estáticos para desarrollo (almacenamiento local)
+    STATIC_ROOT = os.environ.get('STATIC_ROOT', os.path.join(BASE_DIR, 'static'))
+    MEDIA_ROOT = os.environ.get('MEDIA_ROOT', os.path.join(BASE_DIR, 'media'))
+    MEDIA_URL = '/media/'
 
 
 # Password validation
@@ -189,7 +259,6 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
 STATIC_URL = 'static/'
-STATIC_ROOT = os.path.join(BASE_DIR, 'static')
 
 # Channels y Redis
 import os
