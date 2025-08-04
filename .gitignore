@@ -99,6 +99,20 @@ venv.bak
 .dockerignore
 docker-compose.yml
 
+# Certificados SSL (se generan automáticamente)
+ssl/
+*.crt
+*.key
+*.pem
+
+# Variables de entorno de producción
+.env.production
+.env.local
+.env.server
+
+# Logs de despliegue
+logs/
+
 # mkdocs documentation
 /site
 
@@ -122,3 +136,14 @@ dmypy.json
 
 # Archivos de medios subidos por los usuarios
 media/
+
+# Archivos de migraciones (se generan automáticamente)
+*/migrations/00*.py
+restore accounts/migrations/0001_initial.py accounts/migrations/0002_initial.py announcements/migrations/0001_initial.py business/migrations/0001_initial.py inventory/migrations/0001_initial.py inventory/migrations/0002_initial.py notifications/migrations/0001_initial.py sales/migrations/0001_initial.py shifts/migrations/0001_initial.py/migrations/__init__.py
+
+# Certificados SSL
+ssl/
+
+# Variables de entorno de producción
+.env.production
+.env.local

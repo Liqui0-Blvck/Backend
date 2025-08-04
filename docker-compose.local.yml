@@ -19,10 +19,10 @@ services:
 
   api:
     build: .
-    # Cambiamos el comando para no usar el entrypoint
-    command: ["daphne", "-b", "0.0.0.0", "-p", "8000", "backend.asgi:application"]
+    # Usar el entrypoint que maneja migraciones y collectstatic
+    command: ["/app/docker-entrypoint.sh"]
     volumes:
-      # Excluimos el docker-entrypoint.sh del montaje para evitar sobrescribirlo
+      # Código fuente para desarrollo
       - ./accounts:/app/accounts
       - ./announcements:/app/announcements
       - ./backend:/app/backend
@@ -30,39 +30,76 @@ services:
       - ./core:/app/core
       - ./docs:/app/docs
       - ./inventory:/app/inventory
-      - ./media:/app/media
       - ./notifications:/app/notifications
       - ./reports:/app/reports
       - ./sales:/app/sales
       - ./scripts:/app/scripts
       - ./shifts:/app/shifts
-      - ./static:/app/static
       - ./manage.py:/app/manage.py
       - ./requirements.txt:/app/requirements.txt
+      - ./requirements-production.txt:/app/requirements-production.txt
+      # Archivos estáticos y media (solo para desarrollo local)
+      - ./media:/app/media
+      - ./static:/app/static
+      # Logs para debugging
+      - ./logs:/app/logs
     expose:
       - "8000"
     depends_on:
       - db
       - redis
     environment:
+      # Configuración básica de Django
       DJANGO_SETTINGS_MODULE: backend.settings
+      
+      # Base de datos (desarrollo)
       POSTGRES_DB: fruitpos
       POSTGRES_USER: fruitpos_user
       POSTGRES_PASSWORD: fruitpos_pass
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
+      
+      # Redis (desarrollo)
       REDIS_URL: redis://redis:6379/0
+      
+      # Configuración de archivos estáticos/media para desarrollo
+      # NOTA: En desarrollo, usar almacenamiento local por defecto
+      # Para probar Spaces en desarrollo, descomenta las variables P_*
+      STATIC_ROOT: /app/static
+      MEDIA_ROOT: /app/media
+      
+      # DigitalOcean Spaces (descomenta para probar en desarrollo) - VALORES REALES DEL USUARIO
+      # USE_SPACES: "False"  # Cambiar a True para probar Spaces
+      # P_SPACES_ACCESS_KEY_ID: tu-spaces-access-key-id
+      # P_SPACES_SECRET_ACCESS_KEY: tu-spaces-secret-access-key
+      # P_SPACES_BUCKET_NAME: fruitpost
+      # P_SPACES_ENDPOINT_URL: https://sfo3.digitaloceanspaces.com
+      # P_SPACES_REGION: sfo3
+      # P_SPACES_CDN_DOMAIN: fruitpost.sfo3.cdn.digitaloceanspaces.com
+      
+      # CORS para desarrollo
+      CORS_ALLOWED_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173"
+      
+      # Debug habilitado para desarrollo
+      DEBUG: "True"
 
   nginx:
     image: nginx:1.25
     ports:
-      - "8000:8000"
+      - "8000:8000"    # Puerto HTTP para desarrollo local
+      - "80:80"        # Puerto HTTP para producción (redirige a HTTPS)
+      - "443:443"      # Puerto HTTPS para producción
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./static:/static
       - ./media:/media
+      - ./ssl:/etc/nginx/ssl:ro  # Certificados SSL
     depends_on:
       - api
+    # Variables de entorno para Nginx
+    environment:
+      - NGINX_HOST=fruitpos.cl
+      - NGINX_PORT=443
 
 volumes:
   postgres_data:

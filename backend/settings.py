@@ -156,15 +156,15 @@ if IS_PRODUCTION:
     USE_SPACES = os.environ.get('P_USE_SPACES', 'True').lower() == 'true'
     
     if USE_SPACES:
-        # Configuración de DigitalOcean Spaces
+        # Configuración de DigitalOcean Spaces (VALORES REALES DEL USUARIO)
         AWS_ACCESS_KEY_ID = os.environ.get('P_SPACES_ACCESS_KEY_ID')
         AWS_SECRET_ACCESS_KEY = os.environ.get('P_SPACES_SECRET_ACCESS_KEY')
-        AWS_STORAGE_BUCKET_NAME = os.environ.get('P_SPACES_BUCKET_NAME', 'fruitpos-storage')
-        AWS_S3_ENDPOINT_URL = os.environ.get('P_SPACES_ENDPOINT_URL', 'https://nyc3.digitaloceanspaces.com')
-        AWS_S3_REGION_NAME = os.environ.get('P_SPACES_REGION', 'nyc3')
+        AWS_STORAGE_BUCKET_NAME = os.environ.get('P_SPACES_BUCKET_NAME', 'fruitpost')
+        AWS_S3_ENDPOINT_URL = os.environ.get('P_SPACES_ENDPOINT_URL', 'https://sfo3.digitaloceanspaces.com')
+        AWS_S3_REGION_NAME = os.environ.get('P_SPACES_REGION', 'sfo3')
         
         # Configuración de URLs y paths
-        AWS_S3_CUSTOM_DOMAIN = os.environ.get('P_SPACES_CDN_DOMAIN', f'{AWS_STORAGE_BUCKET_NAME}.nyc3.cdn.digitaloceanspaces.com')
+        AWS_S3_CUSTOM_DOMAIN = os.environ.get('P_SPACES_CDN_DOMAIN', f'{AWS_STORAGE_BUCKET_NAME}.sfo3.cdn.digitaloceanspaces.com')
         AWS_LOCATION = 'fruitpos'  # Carpeta base en el bucket
         
         # Configuración de archivos estáticos
