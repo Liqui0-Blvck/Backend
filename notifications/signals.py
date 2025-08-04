@@ -93,7 +93,7 @@ def check_low_stock(sender, instance, created, **kwargs):
                         usuario=user, emisor=emisor,
                         titulo=f"Stock bajo: {nombre_producto}",
                         mensaje=f"El lote {instance.qr_code} tiene poco stock. Quedan {peso_disponible:.2f} kg.",
-                        tipo="stock_bajo", enlace=f"/inventario/lotes/{instance.id}/",
+                        tipo="stock_bajo", enlace=f"/inventory/lots/{instance.uid}/",
                         objeto_relacionado_tipo="fruitlot", objeto_relacionado_id=str(instance.id)
                     )
 

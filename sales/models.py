@@ -164,6 +164,15 @@ class Sale(BaseModel):
         ("cerrada", "Cerrada")
     ]
     estado_pago = models.CharField(max_length=20, choices=ESTADO_CHOICES, default="pendiente", help_text="Estado del pago de la venta")
+    
+    # Campos para cancelación/anulación (soft delete)
+    cancelada = models.BooleanField(default=False, help_text="Indica si la venta ha sido cancelada/anulada")
+    fecha_cancelacion = models.DateTimeField(null=True, blank=True, help_text="Fecha y hora de cancelación")
+    motivo_cancelacion = models.TextField(blank=True, help_text="Motivo de la cancelación")
+    cancelada_por = models.ForeignKey('accounts.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, 
+                                     related_name='ventas_canceladas', help_text="Usuario que canceló la venta")
+    autorizada_por = models.ForeignKey('accounts.CustomUser', on_delete=models.SET_NULL, null=True, blank=True,
+                                      related_name='ventas_autorizadas_cancelacion', help_text="Usuario que autorizó la cancelación")
 
     history = HistoricalRecords()
 
@@ -204,14 +213,61 @@ class Sale(BaseModel):
         # Guardar la venta
         super().save(*args, **kwargs)
 
+    def cancelar_venta(self, usuario_cancela, usuario_autoriza=None, motivo=""):
+        """
+        Cancela la venta de manera segura con auditoría completa.
+        No elimina la venta, solo la marca como cancelada.
+        """
+        from django.utils import timezone
+        
+        if self.cancelada:
+            raise ValueError("Esta venta ya ha sido cancelada")
+        
+        # Marcar como cancelada con auditoría
+        self.cancelada = True
+        self.fecha_cancelacion = timezone.now()
+        self.motivo_cancelacion = motivo
+        self.cancelada_por = usuario_cancela
+        self.autorizada_por = usuario_autoriza or usuario_cancela
+        
+        # Guardar los cambios
+        self.save()
+        
+        # TODO: Aquí se podría añadir lógica para revertir el impacto en inventario
+        # y generar notificaciones o registros adicionales
+        
+        return True
+    
+    def puede_cancelarse(self):
+        """
+        Verifica si la venta puede ser cancelada.
+        """
+        if self.cancelada:
+            return False, "La venta ya está cancelada"
+        
+        # Aquí se pueden añadir más validaciones de negocio
+        # Por ejemplo: tiempo límite, permisos especiales, etc.
+        
+        return True, "La venta puede ser cancelada"
+    
+    @property
+    def estado_display(self):
+        """
+        Devuelve el estado de la venta considerando si está cancelada.
+        """
+        if self.cancelada:
+            return "Cancelada"
+        return self.get_estado_pago_display()
+
     def __str__(self):
         cliente_str = self.cliente.nombre if self.cliente else 'Ocasional'
+        estado_str = " [CANCELADA]" if self.cancelada else ""
         
         # Mostrar información según el tipo de producto
         if self.lote.producto and self.lote.producto.tipo_producto == 'palta':
-            return f"Venta {self.codigo_venta or self.id} - Lote {self.lote_id} - {self.peso_vendido}kg - Cliente: {cliente_str}"
+            return f"Venta {self.codigo_venta or self.id} - Lote {self.lote_id} - {self.peso_vendido}kg - Cliente: {cliente_str}{estado_str}"
         else:
-            return f"Venta {self.codigo_venta or self.id} - Lote {self.lote_id} - {self.unidades_vendidas}unidades - Cliente: {cliente_str}"
+            return f"Venta {self.codigo_venta or self.id} - Lote {self.lote_id} - {self.unidades_vendidas}unidades - Cliente: {cliente_str}{estado_str}"
 
 class SalePending(BaseModel):
     uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)

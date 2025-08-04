@@ -15,6 +15,10 @@ class Business(BaseModel):
 
     def __str__(self):
         return self.nombre
+    
+    class Meta:
+        verbose_name = 'Negocio'
+        verbose_name_plural = 'Negocios'
 
 
 class BusinessConfig(BaseModel):

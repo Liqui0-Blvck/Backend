@@ -22,6 +22,7 @@ class Shift(BaseModel):
     fecha_apertura = models.DateTimeField()
     fecha_cierre = models.DateTimeField(null=True, blank=True)
     estado = models.CharField(max_length=16, choices=ESTADO_CHOICES, default="abierto")
+    saldo_inicial = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     motivo_diferencia = models.TextField(blank=True)
 
     history = HistoricalRecords()

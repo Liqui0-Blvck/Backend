@@ -185,6 +185,10 @@ class SaleSerializer(serializers.ModelSerializer):
     cliente_nombre = serializers.SerializerMethodField()
     estado_pago_display = serializers.SerializerMethodField()
     pagos_asociados = serializers.SerializerMethodField()
+    # Campos de cancelación
+    cancelada_por_nombre = serializers.SerializerMethodField()
+    autorizada_por_nombre = serializers.SerializerMethodField()
+    estado_display = serializers.SerializerMethodField()
 
     # Configurar campos para aceptar UUIDs
     lote = serializers.SlugRelatedField(queryset=FruitLot.objects.all(), slug_field='uid')
@@ -197,6 +201,9 @@ class SaleSerializer(serializers.ModelSerializer):
             'metodo_pago', 'comprobante', 'business', 'pagado', 'fecha_vencimiento',
             'saldo_pendiente', 'estado_pago', 'estado_pago_display', 'pagos_asociados',
             'vendedor_nombre', 'producto_nombre', 'calibre', 'cliente_nombre',
+            # Campos de cancelación
+            'cancelada', 'fecha_cancelacion', 'motivo_cancelacion', 'cancelada_por', 'autorizada_por',
+            'cancelada_por_nombre', 'autorizada_por_nombre', 'estado_display',
             'created_at', 'updated_at'
         )
     
@@ -241,3 +248,19 @@ class SaleSerializer(serializers.ModelSerializer):
             'metodo_pago': pago.metodo_pago,
             'referencia': pago.referencia
         } for pago in pagos]
+    
+    def get_cancelada_por_nombre(self, obj):
+        """Devuelve el nombre del usuario que canceló la venta"""
+        if obj.cancelada_por:
+            return f"{obj.cancelada_por.first_name} {obj.cancelada_por.last_name}".strip() or obj.cancelada_por.username
+        return None
+    
+    def get_autorizada_por_nombre(self, obj):
+        """Devuelve el nombre del usuario que autorizó la cancelación"""
+        if obj.autorizada_por:
+            return f"{obj.autorizada_por.first_name} {obj.autorizada_por.last_name}".strip() or obj.autorizada_por.username
+        return None
+    
+    def get_estado_display(self, obj):
+        """Devuelve el estado de la venta considerando si está cancelada"""
+        return obj.estado_display

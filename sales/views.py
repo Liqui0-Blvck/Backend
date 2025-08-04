@@ -257,6 +257,62 @@ class SaleViewSet(viewsets.ModelViewSet):
         serializer = CustomerSerializer(clientes, many=True)
         return Response(serializer.data)
     
+    @action(detail=True, methods=['post'])
+    def cancelar(self, request, uid=None):
+        """Cancelar una venta de manera segura (soft delete)"""
+        try:
+            venta = self.get_object()
+            
+            # Verificar si la venta puede ser cancelada
+            puede_cancelar, mensaje = venta.puede_cancelarse()
+            if not puede_cancelar:
+                return Response(
+                    {"detail": mensaje}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Obtener datos de la solicitud
+            motivo = request.data.get('motivo', '')
+            usuario_autoriza_id = request.data.get('usuario_autoriza')
+            
+            # Obtener usuario que autoriza (opcional)
+            usuario_autoriza = None
+            if usuario_autoriza_id:
+                try:
+                    from accounts.models import CustomUser
+                    usuario_autoriza = CustomUser.objects.get(id=usuario_autoriza_id)
+                except CustomUser.DoesNotExist:
+                    return Response(
+                        {"detail": "Usuario autorizador no encontrado"}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            
+            # Cancelar la venta
+            venta.cancelar_venta(
+                usuario_cancela=request.user,
+                usuario_autoriza=usuario_autoriza,
+                motivo=motivo
+            )
+            
+            # Serializar la venta actualizada
+            serializer = self.get_serializer(venta)
+            
+            return Response({
+                "detail": "Venta cancelada exitosamente",
+                "venta": serializer.data
+            }, status=status.HTTP_200_OK)
+            
+        except ValueError as e:
+            return Response(
+                {"detail": str(e)}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Error al cancelar la venta: {str(e)}"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
     def get_queryset(self):
         user = self.request.user
         perfil = getattr(user, 'perfil', None)
@@ -590,80 +646,6 @@ def registrar_pago_cliente(request, uid):
         
     except Customer.DoesNotExist:
         return Response({"detail": "Cliente no encontrado"}, status=status.HTTP_404_NOT_FOUND)
-
-
-# @api_view(['GET'])
-# @permission_classes([IsAuthenticated])
-# def informacion_deuda_cliente(request, uid):
-#     """Obtener información detallada sobre la deuda de un cliente específico"""
-#     try:
-#         cliente = Customer.objects.get(uid=uid)
-        
-#         # Verificar que el cliente pertenece al mismo negocio que el usuario
-#         perfil = getattr(request.user, 'perfil', None)
-#         if perfil is None or cliente.business != perfil.business:
-#             return Response({"detail": "No tiene acceso a este cliente"}, 
-#                             status=status.HTTP_403_FORBIDDEN)
-        
-#         # Obtener ventas a crédito del cliente
-#         ventas_credito = Sale.objects.filter(
-#             cliente=cliente, 
-#             metodo_pago='credito'
-#         ).order_by('-created_at')
-        
-#         # Obtener pagos del cliente
-#         pagos = CustomerPayment.objects.filter(cliente=cliente).order_by('-created_at')
-        
-#         # Calcular montos totales
-#         monto_total_credito = ventas_credito.aggregate(total=models.Sum('total'))['total'] or 0
-#         monto_total_pagos = pagos.aggregate(total=models.Sum('monto'))['total'] or 0
-#         saldo_pendiente = monto_total_credito - monto_total_pagos
-        
-#         # Obtener ventas pendientes de pago (con saldo > 0)
-#         ventas_pendientes = []
-#         for venta in ventas_credito:
-#             # Calcular pagos aplicados a esta venta
-#             pagos_venta = CustomerPayment.objects.filter(
-#                 cliente=cliente,
-#                 venta=venta
-#             ).aggregate(total=models.Sum('monto'))['total'] or 0
-            
-#             saldo_venta = venta.total - pagos_venta
-#             if saldo_venta > 0:
-#                 ventas_pendientes.append({
-#                     'uid': venta.uid,
-#                     'fecha': venta.created_at,
-#                     'total': venta.total,
-#                     'pagado': pagos_venta,
-#                     'saldo_pendiente': saldo_venta
-#                 })
-        
-#         # Construir respuesta detallada
-#         response_data = {
-#             'cliente': {
-#                 'uid': cliente.uid,
-#                 'nombre': cliente.nombre,
-#                 'rut': cliente.rut,
-#                 'credito_activo': cliente.credito_activo,
-#                 'limite_credito': cliente.limite_credito,
-#                 'saldo_actual': cliente.saldo_actual,
-#                 'credito_disponible': cliente.credito_disponible
-#             },
-#             'resumen_deuda': {
-#                 'total_ventas_credito': monto_total_credito,
-#                 'total_pagos_realizados': monto_total_pagos,
-#                 'saldo_pendiente': saldo_pendiente,
-#                 'porcentaje_utilizado': round((saldo_pendiente / cliente.limite_credito * 100) 
-#                                              if cliente.limite_credito > 0 else 0, 2)
-#             },
-#             'ventas_pendientes': ventas_pendientes,
-#             'ultimos_pagos': CustomerPaymentSerializer(pagos[:5], many=True).data
-#         }
-        
-#         return Response(response_data)
-        
-#     except Customer.DoesNotExist:
-#         return Response({"detail": "Cliente no encontrado"}, status=status.HTTP_404_NOT_FOUND)
 
 
 @api_view(['GET'])

@@ -18,7 +18,7 @@ class BoxRefillSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = BoxRefill
-        fields = ['id', 'shift', 'fruit_lot', 'fruit_lot_info', 'cajas_relleno', 
+        fields = ['id', 'shift', 'fruit_lot', 'fruit_lot_info', 'cantidad_cajas', 
                  'motivo', 'usuario', 'usuario_nombre', 'fecha', 'business']
     
     def get_usuario_nombre(self, obj):
@@ -314,9 +314,10 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
             # Construir el detalle de la venta pendiente
             detalle_venta = {
                 'id': venta.id,
-                'fecha_creacion': venta.fecha_creacion,
-                'cantidad_kg': getattr(venta, 'cantidad_kg', None),
-                'cantidad_cajas': getattr(venta, 'cantidad_cajas', None),
+                'uid': venta.uid,   
+                'fecha_creacion': venta.created_at,
+                'cantidad_kg': getattr(venta, 'peso_vendido', None),
+                'cantidad_cajas': getattr(venta, 'cajas_vendidas', None),
                 'precio_kg': getattr(venta, 'precio_kg', None),
                 'total': getattr(venta, 'total', None),
                 'metodo_pago': getattr(venta, 'metodo_pago', None),
@@ -359,8 +360,8 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
                     'producto': venta.lote.producto.nombre if hasattr(venta.lote, 'producto') and venta.lote.producto else 'Sin producto',
                     'calibre': getattr(venta.lote, 'calibre', None),
                     'categoria': getattr(venta.lote, 'categoria', None),
-                    'cantidad_kg': venta.cantidad_kg,
-                    'cantidad_cajas': venta.cantidad_cajas,
+                    'peso_vendido': float(venta.peso_vendido),
+                    'cantidad_cajas': venta.cajas_vendidas,
                     'fecha': venta.created_at,
                     'vendedor': f"{venta.vendedor.first_name} {venta.vendedor.last_name}".strip() if venta.vendedor else 'Sin vendedor',
                     'cliente': venta.cliente.nombre if venta.cliente else 'Cliente ocasional'
@@ -402,7 +403,7 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
             'movimientos_relleno': movimientos_relleno,
             'todos_movimientos': todos_movimientos,
             'total_movimientos': len(todos_movimientos),
-            'total_kg_vendidos': sum(m['cantidad_kg'] for m in movimientos_venta),
+            'total_kg_vendidos': sum(m['peso_vendido'] for m in movimientos_venta),
             'total_cajas_vendidas': sum(m['cantidad_cajas'] for m in movimientos_venta),
             'total_cajas_relleno': sum(m['cantidad_cajas'] for m in movimientos_relleno)
         }
@@ -431,10 +432,12 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
                     detalles.append({
                         'id': detalle.id,
                         'producto': detalle.producto.nombre if hasattr(detalle, 'producto') and detalle.producto else 'Sin producto',
-                        'cantidad': detalle.cantidad,
-                        'unidad': detalle.unidad,
-                        'precio_unitario': detalle.precio_unitario,
-                        'subtotal': detalle.subtotal
+                        'cantidad_cajas': detalle.cantidad_cajas,
+                        'peso_bruto': float(detalle.peso_bruto),
+                        'peso_neto': float(detalle.peso_neto),
+                        'costo': float(detalle.costo),
+                        'calibre': detalle.calibre or 'N/A',
+                        'variedad': detalle.variedad or 'N/A'
                     })
             
             # Obtener información del receptor y revisor
@@ -519,92 +522,7 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
             'gastos_por_metodo_pago': [{'metodo': k, 'monto': v} for k, v in metodos_pago.items()],
             'cantidad_gastos': len(gastos)
         }
-    
-    def get_actividad_usuarios(self, obj):
-        """
-        Obtiene un resumen de la actividad de los usuarios durante el turno.
-        """
-        # Definir el rango de fechas del turno
-        fecha_inicio = obj.fecha_apertura
-        fecha_fin = obj.fecha_cierre or timezone.now()
-        
-        # Obtener todas las ventas realizadas durante el turno agrupadas por vendedor
-        ventas_por_usuario = Sale.objects.filter(
-            business=obj.business,
-            created_at__gte=fecha_inicio,
-            created_at__lte=fecha_fin
-        ).values(
-            'vendedor__id',
-            'vendedor__username',
-            'vendedor__first_name',
-            'vendedor__last_name'
-        ).annotate(
-            ventas_count=Count('id'),
-            ventas_monto=Sum('total'),
-            ventas_kg=Sum('cantidad_kg'),
-            ventas_cajas=Sum('cantidad_cajas')
-        ).order_by('-ventas_monto')
-        
-        # Obtener todos los rellenos realizados durante el turno agrupados por usuario
-        rellenos_por_usuario = BoxRefill.objects.filter(
-            shift=obj,
-            fecha__gte=fecha_inicio,
-            fecha__lte=fecha_fin
-        ).values(
-            'usuario__id',
-            'usuario__username',
-            'usuario__first_name',
-            'usuario__last_name'
-        ).annotate(
-            rellenos_count=Count('id'),
-            rellenos_cajas=Sum('cantidad_cajas')
-        ).order_by('-rellenos_count')
-        
-        usuarios_activos = {}
-        for venta in ventas_por_usuario:
-            user_id = venta['vendedor__id']
-            if user_id not in usuarios_activos:
-                usuarios_activos[user_id] = {
-                    'id': user_id,
-                    'username': venta['vendedor__username'],
-                    'nombre': f"{venta['vendedor__first_name']} {venta['vendedor__last_name']}".strip() or venta['vendedor__username'],
-                    'ventas_count': 0,
-                    'ventas_monto': 0,
-                    'ventas_kg': 0,
-                    'ventas_cajas': 0,
-                    'rellenos_count': 0,
-                    'rellenos_cajas': 0
-                }
-            usuarios_activos[user_id]['ventas_count'] = venta['ventas_count']
-            usuarios_activos[user_id]['ventas_monto'] = venta['ventas_monto']
-            usuarios_activos[user_id]['ventas_kg'] = venta['ventas_kg']
-            usuarios_activos[user_id]['ventas_cajas'] = venta['ventas_cajas']
-        
-        for relleno in rellenos_por_usuario:
-            user_id = relleno['usuario__id']
-            if user_id not in usuarios_activos:
-                usuarios_activos[user_id] = {
-                    'id': user_id,
-                    'username': relleno['usuario__username'],
-                    'nombre': f"{relleno['usuario__first_name']} {relleno['usuario__last_name']}".strip() or relleno['usuario__username'],
-                    'ventas_count': 0,
-                    'ventas_monto': 0,
-                    'ventas_kg': 0,
-                    'ventas_cajas': 0,
-                    'rellenos_count': 0,
-                    'rellenos_cajas': 0
-                }
-            usuarios_activos[user_id]['rellenos_count'] = relleno['rellenos_count']
-            usuarios_activos[user_id]['rellenos_cajas'] = relleno['rellenos_cajas']
-        
-        usuarios_lista = list(usuarios_activos.values())
-        usuarios_lista.sort(key=lambda x: (x['ventas_count'] + x['rellenos_count']), reverse=True)
-        
-        return {
-            'usuarios_activos': usuarios_lista,
-            'total_usuarios_activos': len(usuarios_lista)
-        }
-        
+
     def get_transacciones_financieras(self, obj):
         """
         Obtiene un resumen detallado de todas las transacciones financieras durante el turno.
