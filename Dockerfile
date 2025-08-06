@@ -37,7 +37,7 @@ RUN pip install -r requirements-production.txt
 COPY . .
 
 # Copiar y configurar entrypoint
-COPY docker-entrypoint-new.sh /app/docker-entrypoint.sh
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
 # Configurar permisos para usuario django

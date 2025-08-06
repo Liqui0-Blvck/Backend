@@ -1,10 +1,18 @@
 from rest_framework import serializers
 from .models import Business, BusinessConfig
+from .serializers_banking import BankAccountNestedSerializer
 
 class BusinessSerializer(serializers.ModelSerializer):
+    bank_accounts = serializers.SerializerMethodField(read_only=True)
+    
     class Meta:
         model = Business
         fields = '__all__'
+    
+    def get_bank_accounts(self, obj):
+        """Devuelve las cuentas bancarias activas del negocio"""
+        accounts = obj.bank_accounts.filter(activa=True).order_by('orden')
+        return BankAccountNestedSerializer(accounts, many=True).data
 
 class BusinessConfigSerializer(serializers.ModelSerializer):
     user_email = serializers.SerializerMethodField()
