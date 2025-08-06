@@ -2,6 +2,10 @@ from django.db import models
 from django.conf import settings
 from core.models import BaseModel
 from simple_history.models import HistoricalRecords
+from django.utils.translation import gettext_lazy as _
+
+# Importar modelos de cuentas bancarias
+from .models_banking import BankAccount
 
 class Business(BaseModel):
     nombre = models.CharField(max_length=128)

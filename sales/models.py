@@ -7,6 +7,9 @@ from simple_history.models import HistoricalRecords
 from django.utils.translation import gettext_lazy as _
 # No importar modelos de otras apps arriba para evitar ciclos
 
+# Importar modelos de facturación
+from .models_billing import BillingInfo
+
 class Customer(BaseModel):
     uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
     nombre = models.CharField(max_length=100)

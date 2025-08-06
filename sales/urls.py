@@ -7,11 +7,13 @@ from .views import (
     # informacion_deuda_cliente,
     ordenes_pendientes_cliente
 )
+from .views_billing import BillingInfoViewSet
 
 router = routers.DefaultRouter()
 router.register(r'sales', SaleViewSet, basename='sale')
 router.register(r'pending', SalePendingViewSet)
 router.register(r'customers', CustomerViewSet, basename='customer')
+router.register(r'billing-info', BillingInfoViewSet, basename='billing-info')
 
 urlpatterns = [
     # Incluir todas las rutas generadas por el router

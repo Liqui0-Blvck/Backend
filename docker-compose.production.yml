@@ -1,29 +1,7 @@
 version: '3.8'
 
 services:
-  db:
-    image: postgres:15
-    restart: always
-    environment:
-      POSTGRES_DB: ${P_POSTGRES_DB:-fruitpos_prod}
-      POSTGRES_USER: ${P_POSTGRES_USER:-fruitpos_prod_user}
-      POSTGRES_PASSWORD: ${P_POSTGRES_PASSWORD}
-    ports:
-      - "${P_POSTGRES_PORT:-5432}:5432"
-    volumes:
-      - postgres_prod_data:/var/lib/postgresql/data
-    # Configuración optimizada para producción
-    command: >
-      postgres
-      -c shared_preload_libraries=pg_stat_statements
-      -c pg_stat_statements.track=all
-      -c max_connections=200
-      -c shared_buffers=256MB
-      -c effective_cache_size=1GB
-      -c maintenance_work_mem=64MB
-      -c checkpoint_completion_target=0.9
-      -c wal_buffers=16MB
-      -c default_statistics_target=100
+  # Servicio db eliminado - usando base de datos administrada de DigitalOcean
 
   redis:
     image: redis:6-alpine
@@ -44,7 +22,12 @@ services:
     build: .
     restart: always
     # Usar el entrypoint que maneja migraciones y collectstatic
-    command: ["/app/docker-entrypoint.sh"]
+    command: >
+      bash -c "
+        mkdir -p /app/staticfiles /app/media &&
+        echo 'Iniciando aplicación en modo PRODUCCIÓN' &&
+        daphne -b 0.0.0.0 -p 8000 backend.asgi:application
+      "
     volumes:
       # Solo logs para producción (no montar código fuente)
       - ./logs:/app/logs
@@ -53,11 +36,15 @@ services:
     expose:
       - "8000"
     depends_on:
-      - db
       - redis
     environment:
       # Configuración básica de Django
       DJANGO_SETTINGS_MODULE: backend.settings
+      DJANGO_ENV: production
+      STATIC_ROOT: /app/staticfiles
+      STATIC_URL: /static/
+      MEDIA_ROOT: /app/media
+      MEDIA_URL: /media/
       
       # Base de datos (producción con prefijo P_)
       P_POSTGRES_DB: ${P_POSTGRES_DB:-fruitpos_prod}
@@ -151,14 +138,10 @@ services:
       P_SPACES_CDN_DOMAIN: ${P_SPACES_CDN_DOMAIN}
       SECRET_KEY: ${SECRET_KEY}
       DEBUG: "False"
-    depends_on:
-      - db
     profiles:
       - tools  # Solo ejecutar manualmente con --profile tools
 
 volumes:
-  postgres_prod_data:
-    driver: local
   redis_prod_data:
     driver: local
 
@@ -168,4 +151,4 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.20.0.0/16
+        - subnet: 172.30.0.0/16  # Cambiado para evitar conflictos

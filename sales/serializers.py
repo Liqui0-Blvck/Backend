@@ -3,6 +3,7 @@ from django.db import models
 from .models import Sale, SalePending, Customer, CustomerPayment
 from accounts.serializers import CustomUserSerializer
 from inventory.models import FruitLot
+from .serializers_billing import BillingInfoNestedSerializer
 
 
 class CustomerSerializer(serializers.ModelSerializer):
@@ -11,6 +12,7 @@ class CustomerSerializer(serializers.ModelSerializer):
     ultimas_compras = serializers.SerializerMethodField(read_only=True)
     ultimos_pagos = serializers.SerializerMethodField(read_only=True)
     resumen_credito = serializers.SerializerMethodField(read_only=True)
+    billing_info = serializers.SerializerMethodField(read_only=True)
     
     class Meta:
         model = Customer
@@ -80,6 +82,15 @@ class CustomerSerializer(serializers.ModelSerializer):
             'credito_disponible': obj.credito_disponible,
             'limite_credito': obj.limite_credito
         }
+        
+    def get_billing_info(self, obj):
+        """Devuelve la información de facturación del cliente si existe"""
+        try:
+            if hasattr(obj, 'billing_info'):
+                return BillingInfoNestedSerializer(obj.billing_info).data
+        except Exception:
+            pass
+        return None
 
 
 class CustomerPaymentSerializer(serializers.ModelSerializer):

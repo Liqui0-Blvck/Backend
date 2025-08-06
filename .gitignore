@@ -24,8 +24,6 @@ wheels/
 *.egg
 
 # PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
 
@@ -53,38 +51,9 @@ local_settings.py
 db.sqlite3
 db.sqlite3-journal
 
-# Ignorar archivos de migraciones
-*/migrations/*.py
+# Ignorar todas las migraciones excepto __init__.py
+*/migrations/*
 !*/migrations/__init__.py
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
-profile_default/
-ipython_config.py
-
-# pyenv
-.python-version
-
-# celery
-celerybeat-schedule
-
-# SageMath parsed files
-*.sage.py
 
 # Environments
 .env
@@ -94,56 +63,120 @@ venv/
 ENV/
 env.bak
 venv.bak
+.env.production
+.env.local
+.env.server
+.env.development
 
-# Docker
+# Docker y configuración de despliegue
 .dockerignore
-docker-compose.yml
+docker-compose*.yml
+Dockerfile*
+docker/
+docker-compose.override.yml
+docker-compose.prod.yml
+docker-compose.dev.yml
+docker-compose.local.yml
+docker-entrypoint.sh
+docker-entrypoint*.sh
+wait-for-it.sh
+wait-for*.sh
 
-# Certificados SSL (se generan automáticamente)
+# Certificados SSL y seguridad
 ssl/
 *.crt
 *.key
 *.pem
+*.pfx
+*.p12
+*.cer
+*.der
+*.priv
+*.pub
+.htpasswd
+.htaccess
+*_secret*
+*_token*
+*_key*
+*_password*
+*_credential*
 
-# Variables de entorno de producción
-.env.production
-.env.local
-.env.server
+# Documentación y scripts
+docs/
+scripts/
+QUICK_DEPLOY.md
+DEPLOY_*.md
+deploy*.sh
+deploy*.py
+backup*.sh
+backup*.py
+restore*.sh
+restore*.py
+setup*.sh
+setup*.py
+install*.sh
+install*.py
+config*.sh
+config*.py
 
-# Logs de despliegue
+# Logs
 logs/
 
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Sublime Text
+# Archivos de configuración de editores
+.vscode/
+.idea/
 *.sublime-project
 *.sublime-workspace
 
-# Visual Studio Code
-.vscode/
-
-# PyCharm
-.idea/
-
-# Mac
+# Archivos del sistema
 .DS_Store
+Thumbs.db
 
 # Archivos de medios subidos por los usuarios
 media/
 
-# Archivos de migraciones (se generan automáticamente)
-*/migrations/00*.py
-restore accounts/migrations/0001_initial.py accounts/migrations/0002_initial.py announcements/migrations/0001_initial.py business/migrations/0001_initial.py inventory/migrations/0001_initial.py inventory/migrations/0002_initial.py notifications/migrations/0001_initial.py sales/migrations/0001_initial.py shifts/migrations/0001_initial.py/migrations/__init__.py
+# Archivos temporales
+*.tmp
+*.bak
+*.swp
+*~
 
-# Certificados SSL
-ssl/
+# Archivos de caché
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
 
-# Variables de entorno de producción
-.env.production
-.env.local
+# Archivos específicos de producción y configuración del servidor
+prod_settings.py
+prod_*.py
+production_*.py
+production.py
+settings_prod.py
+settings_production.py
+local_settings.py
+server_config.py
+server_config*.py
+gunicorn*.py
+gunicorn*.conf
+nginx*.conf
+apache*.conf
+supervisor*.conf
+uwsgi*.ini
+postgres*.conf
+redis*.conf
+celery*.py
+celeryconfig*.py
+celerybeat*.py
+celerybeat-schedule
+.digitalocean*
+.netlify*
+.heroku*
+.aws*
+.gcloud*
+.azure*
+
+# Archivos de respaldo
+*.backup
+*_backup*
