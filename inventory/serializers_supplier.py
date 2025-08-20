@@ -24,11 +24,11 @@ class SupplierSerializerList(serializers.ModelSerializer):
     
     def get_total_deuda(self, obj):
         """Calcula la deuda total pendiente del proveedor"""
-        # Calcular el total de deuda sumando los montos totales de todas las recepciones
-        total = obj.recepciones.aggregate(total=Sum('monto_total'))['total'] or 0
+        # Calcular el total de deuda sumando los montos totales solo de las recepciones pendientes de pago
+        total = obj.recepciones.filter(estado_pago='pendiente').aggregate(total=Sum('monto_total'))['total'] or 0
         
-        # Restar los pagos realizados
-        pagos = SupplierPayment.objects.filter(recepcion__proveedor=obj)
+        # Restar los pagos realizados para las recepciones pendientes
+        pagos = SupplierPayment.objects.filter(recepcion__proveedor=obj, recepcion__estado_pago='pendiente')
         total_pagado = pagos.aggregate(total=Sum('monto'))['total'] or 0
         
         return total - total_pagado
@@ -102,11 +102,11 @@ class SupplierSerializer(serializers.ModelSerializer):
     
     def get_total_deuda(self, obj):
         """Calcula la deuda total pendiente del proveedor"""
-        # Calcular el total de deuda sumando los montos totales de todas las recepciones
-        total = obj.recepciones.aggregate(total=Sum('monto_total'))['total'] or 0
+        # Calcular el total de deuda sumando los montos totales solo de las recepciones pendientes de pago
+        total = obj.recepciones.filter(estado_pago='pendiente').aggregate(total=Sum('monto_total'))['total'] or 0
         
-        # Restar los pagos realizados
-        pagos = SupplierPayment.objects.filter(recepcion__proveedor=obj)
+        # Restar los pagos realizados para las recepciones pendientes
+        pagos = SupplierPayment.objects.filter(recepcion__proveedor=obj, recepcion__estado_pago='pendiente')
         total_pagado = pagos.aggregate(total=Sum('monto'))['total'] or 0
         
         return total - total_pagado
@@ -117,12 +117,12 @@ class SupplierSerializer(serializers.ModelSerializer):
         return pagos.aggregate(total=Sum('monto'))['total'] or 0
     
     def get_recepciones_pendientes(self, obj):
-        """Retorna las recepciones pendientes de pago"""
-        # Obtener todas las recepciones del proveedor
-        recepciones = obj.recepciones.all()
+        """Retorna las últimas 5 recepciones del proveedor con su estado"""
+        # Obtener todas las recepciones del proveedor, ordenadas por fecha (más recientes primero)
+        recepciones = obj.recepciones.all().order_by('-fecha_recepcion')[:5]
         
-        # Lista para almacenar las recepciones pendientes
-        pendientes = []
+        # Lista para almacenar las recepciones
+        lista_recepciones = []
         
         for recepcion in recepciones:
             # Calcular el monto total de la recepción
@@ -131,18 +131,21 @@ class SupplierSerializer(serializers.ModelSerializer):
             # Calcular el total pagado para esta recepción
             pagos = recepcion.pagos.aggregate(total=Sum('monto'))['total'] or 0
             
-            # Si hay saldo pendiente, agregar a la lista
-            if monto_total > pagos:
-                pendientes.append({
-                    'uid': recepcion.uid,
-                    'numero_guia': recepcion.numero_guia,
-                    'fecha_recepcion': recepcion.fecha_recepcion,
-                    'monto_total': monto_total,
-                    'monto_pagado': pagos,
-                    'saldo_pendiente': monto_total - pagos
-                })
+            # Calcular saldo pendiente (si está pagado, el saldo es 0)
+            saldo_pendiente = 0 if recepcion.estado_pago == 'pagado' else (monto_total - pagos)
+            
+            # Agregar a la lista con el estado incluido
+            lista_recepciones.append({
+                'uid': recepcion.uid,
+                'numero_guia': recepcion.numero_guia,
+                'fecha_recepcion': recepcion.fecha_recepcion,
+                'monto_total': monto_total,
+                'monto_pagado': pagos if recepcion.estado_pago == 'pendiente' else monto_total,
+                'saldo_pendiente': saldo_pendiente,
+                'estado_pago': recepcion.estado_pago
+            })
         
-        return pendientes
+        return lista_recepciones
     
     def get_cantidad_recepciones(self, obj):
         """Retorna el número total de recepciones del proveedor"""
@@ -226,7 +229,7 @@ class SupplierSerializer(serializers.ModelSerializer):
                     'calidad': detalle.get_calidad_display(),
                     'fecha_recepcion': recepcion.fecha_recepcion,
                     'numero_guia': recepcion.numero_guia,
-                    'lote_id': detalle.lote_creado.id if detalle.lote_creado else None
+                    'precio_compra': detalle.costo,
                 })
         
         return detalles

@@ -12,8 +12,8 @@ class LotMovementSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     fecha = serializers.DateTimeField()
     tipo = serializers.CharField()
-    estado_anterior = serializers.CharField(allow_null=True)
-    estado_nuevo = serializers.CharField(allow_null=True)
+    estadoAnterior = serializers.CharField(allow_null=True)
+    estadoNuevo = serializers.CharField(allow_null=True)
     cantidad = serializers.FloatField(allow_null=True)
     usuario = serializers.CharField()
     notas = serializers.CharField(allow_null=True)
@@ -39,91 +39,114 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
     uid = serializers.UUIDField()
     codigo = serializers.CharField(source='qr_code')
     
-    # Información del producto
-    producto_id = serializers.IntegerField(source='producto.id')
-    producto_nombre = serializers.CharField(source='producto.nombre')
-    marca = serializers.CharField()
-    tipo_producto = serializers.SerializerMethodField()
-    
-    # Información de origen
-    proveedor_id = serializers.SerializerMethodField()
-    proveedor_nombre = serializers.CharField(source='proveedor')
-    procedencia = serializers.CharField()
-    pais = serializers.CharField()
-    
-    # Fechas importantes
-    fecha_ingreso = serializers.DateField()
-    fecha_maduracion = serializers.DateField()
-    
-    # Información de peso y cantidad
-    cantidad_cajas = serializers.IntegerField()
-    box_type_nombre = serializers.CharField(source='box_type.nombre')
-    pallet_type_nombre = serializers.SerializerMethodField()
-    peso_bruto = serializers.FloatField()
-    peso_neto = serializers.FloatField()
-    peso_disponible = serializers.SerializerMethodField()
-    peso_reservado = serializers.SerializerMethodField()
-    peso_vendible = serializers.SerializerMethodField()
-    
-    # Información de maduración
-    estado_maduracion = serializers.CharField()
-    ubicacion = serializers.SerializerMethodField()
-    
-    # Información de costos y precios
-    costo_inicial = serializers.FloatField()
-    costo_actual = serializers.SerializerMethodField()
-    costo_diario_almacenaje = serializers.FloatField()
-    precio_recomendado_kg = serializers.SerializerMethodField()
-    costo_real_kg = serializers.SerializerMethodField()
-    ganancia_kg = serializers.SerializerMethodField()
-    margen = serializers.SerializerMethodField()
-    
-    # Rangos de precios sugeridos
-    precio_sugerido_min = serializers.FloatField(allow_null=True)
-    precio_sugerido_max = serializers.FloatField(allow_null=True)
-    
-    # Métricas calculadas
-    dias_desde_ingreso = serializers.SerializerMethodField()
-    dias_en_bodega = serializers.SerializerMethodField()
-    porcentaje_perdida = serializers.SerializerMethodField()
-    perdida_estimada = serializers.SerializerMethodField()
-    valor_perdida = serializers.SerializerMethodField()
-    ingreso_estimado = serializers.SerializerMethodField()
-    ganancia_total = serializers.SerializerMethodField()
+    # Información agrupada en objetos
+    producto = serializers.SerializerMethodField()
+    origen = serializers.SerializerMethodField()
+    fechas = serializers.SerializerMethodField()
+    inventario = serializers.SerializerMethodField()
+    maduracion = serializers.SerializerMethodField()
+    precios = serializers.SerializerMethodField()
+    metricas = serializers.SerializerMethodField()
     
     # Valores de llegada y comparación
-    valores_llegada = serializers.SerializerMethodField()
-    comparacion_venta = serializers.SerializerMethodField()
+    valoresLlegada = serializers.SerializerMethodField()
+    comparacionVenta = serializers.SerializerMethodField()
     
     # Recomendaciones del sistema
-    urgencia_venta = serializers.SerializerMethodField()
-    recomendacion = serializers.SerializerMethodField()
+    recomendaciones = serializers.SerializerMethodField()
     
     # Historial de movimientos y precios
     movimientos = serializers.SerializerMethodField()
-    historial_precios = serializers.SerializerMethodField()
+    historialPrecios = serializers.SerializerMethodField()
+    
+    def get_producto(self, obj):
+        return {
+            'id': obj.producto.id if obj.producto else None,
+            'nombre': obj.producto.nombre if obj.producto else None,
+            'marca': obj.marca,
+            'tipo': self.get_tipoProducto(obj)
+        }
+    
+    def get_origen(self, obj):
+        return {
+            'proveedorId': self.get_proveedorId(obj),
+            'proveedor': obj.proveedor,
+            'procedencia': obj.procedencia,
+            'pais': obj.pais
+        }
+    
+    def get_fechas(self, obj):
+        return {
+            'recepcion': obj.fecha_ingreso,
+            'maduracion': obj.fecha_maduracion,
+            'diasEnInventario': self.get_diasEnInventario(obj),
+            'diasDesdeIngreso': self.get_diasDesdeIngreso(obj),
+            'diasEnBodega': self.get_diasEnBodega(obj)
+        }
+    
+    def get_inventario(self, obj):
+        return {
+            'cantidadCajasInicial': obj.cantidad_cajas,
+            'cantidadCajasActual': self.get_cantidadCajasActual(obj),
+            'boxType': obj.box_type.nombre if obj.box_type else None,
+            'palletType': self.get_palletType(obj),
+            'pesoBruto': obj.peso_bruto,
+            'pesoNeto': obj.peso_neto,
+            'cantidadInicialKg': self.get_cantidadInicialKg(obj),
+            'cantidadActualKg': self.get_cantidadActualKg(obj),
+            'pesoDisponible': self.get_pesoDisponible(obj),
+            'pesoReservado': self.get_pesoReservado(obj),
+            'pesoVendible': self.get_pesoVendible(obj),
+            'valorInventario': self.get_valorInventario(obj)
+        }
+    
+    def get_maduracion(self, obj):
+        return {
+            'estado': obj.estado_maduracion,
+            'ubicacion': self.get_ubicacion(obj)
+        }
+    
+    def get_precios(self, obj):
+        return {
+            'precioCompra': obj.costo_inicial,
+            'precioActual': self.get_precioActual(obj),
+            'costoDiarioAlmacenaje': obj.costo_diario_almacenaje,
+            'precioRecomendadoKg': self.get_precioRecomendadoKg(obj),
+            'costoRealKg': self.get_costoRealKg(obj),
+            'gananciaKg': self.get_gananciaKg(obj),
+            'margen': self.get_margen(obj),
+            'precioSugeridoMin': obj.precio_sugerido_min,
+            'precioSugeridoMax': obj.precio_sugerido_max
+        }
+    
+    def get_metricas(self, obj):
+        return {
+            'porcentajePerdida': self.get_porcentajePerdida(obj),
+            'perdidaEstimada': self.get_perdidaEstimada(obj),
+            'valorPerdida': self.get_valorPerdida(obj),
+            'ingresoEstimado': self.get_ingresoEstimado(obj),
+            'gananciaTotal': self.get_gananciaTotal(obj)
+        }
+    
+    def get_recomendaciones(self, obj):
+        return {
+            'urgenciaVenta': self.get_urgenciaVenta(obj),
+            'recomendacion': self.get_recomendacion(obj)
+        }
 
+    # Los campos ahora están agrupados en objetos anidados
+    
     class Meta:
         model = FruitLot
         fields = (
-            'id', 'uid', 'codigo', 
-            'producto_id', 'producto_nombre', 'marca', 'tipo_producto',
-            'proveedor_id', 'proveedor_nombre', 'procedencia', 'pais',
-            'fecha_ingreso', 'fecha_maduracion',
-            'cantidad_cajas', 'box_type_nombre', 'pallet_type_nombre', 
-            'peso_bruto', 'peso_neto', 'peso_disponible', 'peso_reservado', 'peso_vendible',
-            'estado_maduracion', 'ubicacion',
-            'costo_inicial', 'costo_actual', 'costo_diario_almacenaje', 
-            'precio_recomendado_kg', 'costo_real_kg', 'ganancia_kg', 'margen',
-            'precio_sugerido_min', 'precio_sugerido_max',
-            'dias_desde_ingreso', 'dias_en_bodega', 'porcentaje_perdida', 
-            'perdida_estimada', 'valor_perdida', 'ingreso_estimado', 'ganancia_total',
-            'valores_llegada', 'comparacion_venta',
-            'urgencia_venta', 'recomendacion',
-            'movimientos', 'historial_precios',
+            'id', 'uid', 'codigo',
+            'producto', 'origen', 'fechas', 'inventario', 'maduracion',
+            'precios', 'metricas', 'recomendaciones',
+            'valoresLlegada', 'comparacionVenta',
+            'movimientos', 'historialPrecios',
         )
 
-    def get_tipo_producto(self, obj):
+    def get_tipoProducto(self, obj):
         nombre = (obj.producto.nombre if obj.producto else '').lower()
         if 'palta' in nombre or 'aguacate' in nombre:
             return 'palta'
@@ -133,17 +156,35 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
             return 'platano'
         return 'otro'
 
-    def get_proveedor_id(self, obj):
+    def get_proveedorId(self, obj):
         # En este caso, proveedor es un string, no un objeto relacionado
         # Devolvemos None o un ID ficticio según sea necesario
         return None
 
-    def get_pallet_type_nombre(self, obj):
+    def get_palletType(self, obj):
         if obj.pallet_type:
             return obj.pallet_type.nombre
         return None
+        
+    def get_cantidadCajasActual(self, obj):
+        # Por defecto devolvemos la cantidad inicial de cajas
+        # Este método podría ser modificado para calcular la cantidad actual
+        # basado en ventas u otros movimientos
+        return obj.cantidad_cajas
+        
+    def get_cantidadInicialKg(self, obj):
+        tipo = self.get_tipoProducto(obj)
+        if tipo == 'palta':
+            return float(obj.peso_neto or 0)
+        return None
+        
+    def get_cantidadActualKg(self, obj):
+        tipo = self.get_tipoProducto(obj)
+        if tipo == 'palta':
+            return float(self.get_pesoDisponible(obj))
+        return None
 
-    def get_peso_reservado(self, obj):
+    def get_pesoReservado(self, obj):
         from .models import StockReservation
         from sales.models import SalePendingItem
         
@@ -162,14 +203,14 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
         total = float(reservas_directas) + float(reservas_pendientes)
         return total
 
-    def get_peso_disponible(self, obj):
+    def get_pesoDisponible(self, obj):
         neto = float(obj.peso_neto or 0)
-        reservado = self.get_peso_reservado(obj)
+        reservado = self.get_pesoReservado(obj)
         return neto - reservado if neto > reservado else 0
 
-    def get_peso_vendible(self, obj):
-        disponible = self.get_peso_disponible(obj)
-        perdida = self.get_perdida_estimada(obj)
+    def get_pesoVendible(self, obj):
+        disponible = self.get_pesoDisponible(obj)
+        perdida = self.get_perdidaEstimada(obj)
         return disponible - perdida if disponible > perdida else 0
 
     def get_ubicacion(self, obj):
@@ -177,22 +218,36 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
         # según la lógica de negocio o devolver un valor por defecto
         return "Bodega principal"
 
-    def get_costo_actual(self, obj):
+    def get_precioActual(self, obj):
         return float(obj.costo_actualizado())
 
-    def get_dias_desde_ingreso(self, obj):
+    def get_diasEnInventario(self, obj):
         if obj.fecha_ingreso:
             return (date.today() - obj.fecha_ingreso).days
         return 0
 
-    def get_dias_en_bodega(self, obj):
-        return self.get_dias_desde_ingreso(obj)
+    def get_diasDesdeIngreso(self, obj):
+        if obj.fecha_ingreso:
+            return (date.today() - obj.fecha_ingreso).days
+        return 0
 
-    def get_porcentaje_perdida(self, obj):
+    def get_diasEnBodega(self, obj):
+        return self.get_diasDesdeIngreso(obj)
+        
+    def get_valorInventario(self, obj):
+        tipo = self.get_tipoProducto(obj)
+        if tipo == 'palta':
+            # Para paltas: kilos netos * precio_actual
+            return float(obj.peso_neto or 0) * float(self.get_precioActual(obj))
+        else:
+            # Para otros: cantidad de cajas * precio_inicial
+            return float(obj.cantidad_cajas or 0) * float(obj.costo_inicial or 0)
+
+    def get_porcentajePerdida(self, obj):
         """
         Calcula el porcentaje de pérdida basado en el tipo de producto y estado de maduración
         """
-        tipo = self.get_tipo_producto(obj)
+        tipo = self.get_tipoProducto(obj)
         estado = getattr(obj, 'estado_maduracion', 'verde')
         if tipo == 'palta':
             if estado == 'verde':
@@ -205,7 +260,7 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
                 return 10
         return 0
 
-    def get_perdida_estimada(self, obj):
+    def get_perdidaEstimada(self, obj):
         """
         Calcula la pérdida estimada basada en los valores iniciales del historial
         """
@@ -217,16 +272,16 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
                 peso_inicial = float(getattr(primer_registro, 'peso_neto', 0) or 0)
                 
                 # Calculamos la pérdida usando el peso inicial
-                porcentaje = self.get_porcentaje_perdida(obj)
+                porcentaje = self.get_porcentajePerdida(obj)
                 return round(peso_inicial * (porcentaje/100), 2)
         except Exception:
             pass
             
         # Si no hay historial, usamos el método anterior como fallback
         neto = float(obj.peso_neto or 0)
-        return round(neto * (self.get_porcentaje_perdida(obj)/100), 2)
+        return round(neto * (self.get_porcentajePerdida(obj)/100), 2)
 
-    def get_valor_perdida(self, obj):
+    def get_valorPerdida(self, obj):
         """
         Calcula el valor de la pérdida basado en los valores iniciales del historial
         """
@@ -237,7 +292,7 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
                 primer_registro = historial.first()
                 
                 # Obtenemos la pérdida estimada y el costo inicial
-                perdida = self.get_perdida_estimada(obj)
+                perdida = self.get_perdidaEstimada(obj)
                 costo_inicial = float(getattr(primer_registro, 'costo_inicial', 0) or 0)
                 
                 return round(perdida * costo_inicial, 2)
@@ -245,27 +300,27 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
             pass
             
         # Si no hay historial, usamos el método anterior como fallback
-        perdida = self.get_perdida_estimada(obj)
-        costo_actual = float(self.get_costo_actual(obj) or 0)
+        perdida = self.get_perdidaEstimada(obj)
+        costo_actual = float(self.get_precioActual(obj) or 0)
         return round(perdida * costo_actual, 2)
 
-    def get_precio_recomendado_kg(self, obj):
-        costo_real = self.get_costo_real_kg(obj)
+    def get_precioRecomendadoKg(self, obj):
+        costo_real = self.get_costoRealKg(obj)
         return round(costo_real * 1.3, 2)
 
-    def get_costo_real_kg(self, obj):
+    def get_costoRealKg(self, obj):
         return float(obj.costo_inicial or 0)
 
-    def get_ganancia_kg(self, obj):
-        return round(self.get_precio_recomendado_kg(obj) - self.get_costo_real_kg(obj), 2)
+    def get_gananciaKg(self, obj):
+        return round(self.get_precioRecomendadoKg(obj) - self.get_costoRealKg(obj), 2)
 
     def get_margen(self, obj):
-        costo = self.get_costo_real_kg(obj)
+        costo = self.get_costoRealKg(obj)
         if costo > 0:
-            return round((self.get_ganancia_kg(obj) / costo) * 100, 2)
+            return round((self.get_gananciaKg(obj) / costo) * 100, 2)
         return 25.0
 
-    def get_ingreso_estimado(self, obj):
+    def get_ingresoEstimado(self, obj):
         """
         Calcula el ingreso estimado basado en los valores iniciales del pallet
         obtenidos del historial.
@@ -286,10 +341,10 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
             pass
             
         # Si no hay historial, usamos el método anterior como fallback
-        peso_real = self.get_peso_vendible(obj)
-        return round(self.get_precio_recomendado_kg(obj) * peso_real, 2)
+        peso_real = self.get_pesoVendible(obj)
+        return round(self.get_precioRecomendadoKg(obj) * peso_real, 2)
 
-    def get_ganancia_total(self, obj):
+    def get_gananciaTotal(self, obj):
         """
         Calcula la ganancia total estimada basada en los valores iniciales del pallet
         obtenidos del historial.
@@ -313,10 +368,10 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
             pass
             
         # Si no hay historial, usamos el método anterior como fallback
-        peso_real = self.get_peso_vendible(obj)
-        return round(self.get_ganancia_kg(obj) * peso_real, 2)
+        peso_real = self.get_pesoVendible(obj)
+        return round(self.get_gananciaKg(obj) * peso_real, 2)
 
-    def get_urgencia_venta(self, obj):
+    def get_urgenciaVenta(self, obj):
         estado = getattr(obj, 'estado_maduracion', 'verde')
         if estado == 'maduro':
             return 'alta'
@@ -326,30 +381,30 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
 
     def get_recomendacion(self, obj):
         estado = getattr(obj, 'estado_maduracion', 'verde')
-        precio = self.get_precio_recomendado_kg(obj)
+        precio = self.get_precioRecomendadoKg(obj)
         if estado == 'verde':
             return {
                 'accion': 'esperar',
                 'mensaje': 'Mantener en cámara de maduración controlada. Revisar en 3 días.',
-                'precio_sugerido': precio
+                'precioSugerido': precio
             }
         elif estado == 'pre-maduro':
             return {
-                'accion': 'preparar_venta',
+                'accion': 'prepararVenta',
                 'mensaje': 'Preparar para venta en 2 días.',
-                'precio_sugerido': precio
+                'precioSugerido': precio
             }
         elif estado == 'maduro':
             return {
                 'accion': 'vender',
                 'mensaje': 'Vender lo antes posible.',
-                'precio_sugerido': precio
+                'precioSugerido': precio
             }
         elif estado == 'sobremaduro':
             return {
                 'accion': 'liquidar',
                 'mensaje': 'Liquidar stock urgentemente.',
-                'precio_sugerido': precio
+                'precioSugerido': precio
             }
         return None
 
@@ -364,16 +419,16 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
         maduration_history = MadurationHistory.objects.filter(lote__uid=obj.uid).order_by('fecha_cambio')
         
         for i, history in enumerate(maduration_history):
-            estado_anterior = None
+            estadoAnterior = None
             if i > 0:
-                estado_anterior = maduration_history[i-1].estado_maduracion
+                estadoAnterior = maduration_history[i-1].estado_maduracion
                 
             movimientos.append({
                 'id': i + 1,
                 'fecha': history.fecha_cambio.isoformat() if hasattr(history.fecha_cambio, 'isoformat') else str(history.fecha_cambio),
-                'tipo': 'cambio_maduracion',
-                'estado_anterior': estado_anterior,
-                'estado_nuevo': history.estado_maduracion,
+                'tipo': 'cambioMaduracion',
+                'estadoAnterior': estadoAnterior,
+                'estadoNuevo': history.estado_maduracion,
                 'cantidad': None,
                 'usuario': 'Sistema',  # Podría mejorarse si se guarda el usuario que hizo el cambio
                 'notas': None
@@ -383,9 +438,30 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
         ventas = Sale.objects.filter(items__lote=obj).distinct()        
         for i, venta in enumerate(ventas):
             # Obtener el peso vendido desde los items de la venta
-            peso_vendido = venta.items.filter(lote=obj).aggregate(total=Sum('peso_vendido'))['total'] or 0
+            pesoVendido = venta.items.filter(lote=obj).aggregate(total=Sum('peso_vendido'))['total'] or 0
+            
+            # Añadir la venta como un movimiento
+            movimientos.append({
+                'id': len(maduration_history) + i + 1,
+                'fecha': venta.created_at.isoformat() if hasattr(venta.created_at, 'isoformat') else str(venta.created_at),
+                'tipo': 'venta',
+                'estadoAnterior': None,
+                'estadoNuevo': None,
+                'cantidad': pesoVendido,
+                'usuario': f"{venta.vendedor.first_name} {venta.vendedor.last_name}".strip() if hasattr(venta, 'vendedor') and venta.vendedor else "Sistema",
+                'notas': f"Venta #{venta.id} - {venta.cliente.nombre if venta.cliente else getattr(venta, 'nombre_cliente', 'Cliente no especificado')}"
+            })
+            
+        # Ordenar movimientos por fecha
+        movimientos = sorted(movimientos, key=lambda x: x['fecha'])
         
-    def get_valores_llegada(self, obj):
+        # Renumerar IDs después de ordenar
+        for i, mov in enumerate(movimientos):
+            mov['id'] = i + 1
+            
+        return movimientos
+        
+    def get_valoresLlegada(self, obj):
         """
         Obtiene los valores iniciales del pallet al momento de su llegada desde el historial.
         """
@@ -396,30 +472,30 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
         if primer_registro:
             # Usar valores del primer registro histórico
             return {
-                'fecha_ingreso': primer_registro.fecha_ingreso.isoformat() if hasattr(primer_registro.fecha_ingreso, 'isoformat') else str(primer_registro.fecha_ingreso),
-                'peso_bruto_inicial': float(primer_registro.peso_bruto if primer_registro.peso_bruto else 0),
-                'peso_neto_inicial': float(primer_registro.peso_neto if primer_registro.peso_neto else 0),
-                'cantidad_cajas_inicial': primer_registro.cantidad_cajas,
-                'costo_inicial': float(primer_registro.costo_inicial if primer_registro.costo_inicial else 0),
-                'costo_por_kg_inicial': round(float(primer_registro.costo_inicial) / float(primer_registro.peso_neto), 2) 
+                'fechaIngreso': primer_registro.fecha_ingreso.isoformat() if hasattr(primer_registro.fecha_ingreso, 'isoformat') else str(primer_registro.fecha_ingreso),
+                'pesoBrutoInicial': float(primer_registro.peso_bruto if primer_registro.peso_bruto else 0),
+                'pesoNetoInicial': float(primer_registro.peso_neto if primer_registro.peso_neto else 0),
+                'cantidadCajasInicial': primer_registro.cantidad_cajas,
+                'costoInicial': float(primer_registro.costo_inicial if primer_registro.costo_inicial else 0),
+                'costoPorKgInicial': round(float(primer_registro.costo_inicial) / float(primer_registro.peso_neto), 2) 
                                         if primer_registro.peso_neto and float(primer_registro.peso_neto) > 0 else 0,
-                'precio_sugerido_min': float(primer_registro.precio_sugerido_min) if primer_registro.precio_sugerido_min else None,
-                'precio_sugerido_max': float(primer_registro.precio_sugerido_max) if primer_registro.precio_sugerido_max else None
+                'precioSugeridoMin': float(primer_registro.precio_sugerido_min) if primer_registro.precio_sugerido_min else None,
+                'precioSugeridoMax': float(primer_registro.precio_sugerido_max) if primer_registro.precio_sugerido_max else None
             }
         else:
             # Fallback a los valores actuales si no hay historial
             return {
-                'fecha_ingreso': obj.fecha_ingreso.isoformat() if hasattr(obj.fecha_ingreso, 'isoformat') else str(obj.fecha_ingreso),
-                'peso_bruto_inicial': float(obj.peso_bruto if obj.peso_bruto else 0),
-                'peso_neto_inicial': float(obj.peso_neto or 0),
-                'cantidad_cajas_inicial': obj.cantidad_cajas,
-                'costo_inicial': float(obj.costo_inicial if obj.costo_inicial else 0),
-                'costo_por_kg_inicial': round(float(obj.costo_inicial) / float(obj.peso_neto), 2) if obj.peso_neto and float(obj.peso_neto) > 0 else 0,
-                'precio_sugerido_min': float(obj.precio_sugerido_min) if obj.precio_sugerido_min else None,
-                'precio_sugerido_max': float(obj.precio_sugerido_max) if obj.precio_sugerido_max else None
+                'fechaIngreso': obj.fecha_ingreso.isoformat() if hasattr(obj.fecha_ingreso, 'isoformat') else str(obj.fecha_ingreso),
+                'pesoBrutoInicial': float(obj.peso_bruto if obj.peso_bruto else 0),
+                'pesoNetoInicial': float(obj.peso_neto or 0),
+                'cantidadCajasInicial': obj.cantidad_cajas,
+                'costoInicial': float(obj.costo_inicial if obj.costo_inicial else 0),
+                'costoPorKgInicial': round(float(obj.costo_inicial) / float(obj.peso_neto), 2) if obj.peso_neto and float(obj.peso_neto) > 0 else 0,
+                'precioSugeridoMin': float(obj.precio_sugerido_min) if obj.precio_sugerido_min else None,
+                'precioSugeridoMax': float(obj.precio_sugerido_max) if obj.precio_sugerido_max else None
             }
     
-    def get_historial_precios(self, obj):
+    def get_historialPrecios(self, obj):
         """
         Genera un historial de precios basado en las ventas del lote.
         """
@@ -434,7 +510,7 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
                 'id': i + 1,
                 'fecha': item.venta.created_at.isoformat() if hasattr(item.venta.created_at, 'isoformat') else str(item.venta.created_at),
                 'precio': float(item.precio_kg) if item.precio_kg else 0,
-                'peso_vendido': float(item.peso_vendido) if item.peso_vendido else 0,
+                'pesoVendido': float(item.peso_vendido) if item.peso_vendido else 0,
                 'usuario': f"{item.venta.vendedor.first_name} {item.venta.vendedor.last_name}".strip() if hasattr(item.venta, 'vendedor') and item.venta.vendedor else "Sistema",
                 'notas': f"Venta #{item.venta.id} - {item.venta.cliente.nombre if item.venta.cliente else getattr(item.venta, 'nombre_cliente', 'Cliente no especificado')}"
             })
@@ -444,15 +520,15 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
             historial.append({
                 'id': 1,
                 'fecha': timezone.now().isoformat(),
-                'precio': self.get_precio_recomendado_kg(obj),
-                'peso_vendido': 0,
+                'precio': self.get_precioRecomendadoKg(obj),
+                'pesoVendido': 0,
                 'usuario': "Sistema",
                 'notas': "Precio recomendado inicial"
             })
         
         return historial
         
-    def get_comparacion_venta(self, obj):
+    def get_comparacionVenta(self, obj):
         """
         Compara los valores iniciales del pallet con los valores de venta total.
         """
@@ -463,130 +539,130 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
         # Calcular totales de venta con redondeo adecuado
         from sales.models import SaleItem
         items_lote = SaleItem.objects.filter(lote=obj)
-        peso_total_vendido = round(sum(float(item.peso_vendido) for item in items_lote), 2)
-        monto_total_ventas = round(sum(float(item.subtotal) for item in items_lote), 2)
-        precio_promedio_kg = round(monto_total_ventas / peso_total_vendido, 2) if peso_total_vendido > 0 else 0
+        pesoTotalVendido = round(sum(float(item.peso_vendido) for item in items_lote), 2)
+        montoTotalVentas = round(sum(float(item.subtotal) for item in items_lote), 2)
+        precioPromedioKg = round(montoTotalVentas / pesoTotalVendido, 2) if pesoTotalVendido > 0 else 0
         
         # Obtener valores iniciales del historial
         try:
             historial = obj.history.all().order_by('history_date')
             if historial.exists():
                 primer_registro = historial.first()
-                peso_neto_inicial = float(getattr(primer_registro, 'peso_neto', 0) or 0)
-                costo_inicial = float(getattr(primer_registro, 'costo_inicial', 0) or 0)
+                pesoNetoInicial = float(getattr(primer_registro, 'peso_neto', 0) or 0)
+                costoInicial = float(getattr(primer_registro, 'costo_inicial', 0) or 0)
             else:
                 # Fallback a valores actuales
-                peso_neto_inicial = float(obj.peso_neto or 0)
-                costo_inicial = float(obj.costo_inicial or 0)
+                pesoNetoInicial = float(obj.peso_neto or 0)
+                costoInicial = float(obj.costo_inicial or 0)
         except Exception:
             # Fallback a valores actuales en caso de error
-            peso_neto_inicial = float(obj.peso_neto or 0)
-            costo_inicial = float(obj.costo_inicial or 0)
+            pesoNetoInicial = float(obj.peso_neto or 0)
+            costoInicial = float(obj.costo_inicial or 0)
         
         # Evitar división por cero
-        if peso_neto_inicial <= 0:
-            peso_neto_inicial = 1  # Valor mínimo para evitar división por cero
+        if pesoNetoInicial <= 0:
+            pesoNetoInicial = 1  # Valor mínimo para evitar división por cero
         
         # Calcular costo por kg con validación
-        costo_por_kg = round(costo_inicial / peso_neto_inicial, 2) if peso_neto_inicial > 0 else 0
+        costoPorKg = round(costoInicial / pesoNetoInicial, 2) if pesoNetoInicial > 0 else 0
         
         # Calcular diferencias y porcentajes con límites razonables
-        diferencia_precio = round(precio_promedio_kg - costo_por_kg, 2)
+        diferenciaPrecio = round(precioPromedioKg - costoPorKg, 2)
         
         # Calcular porcentaje de margen con límites razonables
-        if costo_por_kg > 0:
-            porcentaje_margen = round((diferencia_precio / costo_por_kg) * 100, 2)
+        if costoPorKg > 0:
+            porcentajeMargen = round((diferenciaPrecio / costoPorKg) * 100, 2)
             # Limitar a un rango razonable para presentación (-100% a 1000%)
-            porcentaje_margen = max(min(porcentaje_margen, 1000), -100)
+            porcentajeMargen = max(min(porcentajeMargen, 1000), -100)
         else:
-            porcentaje_margen = 0
+            porcentajeMargen = 0
         
         # Calcular porcentaje vendido con límites razonables
-        porcentaje_vendido = round((peso_total_vendido / peso_neto_inicial) * 100, 2)
+        porcentajeVendido = round((pesoTotalVendido / pesoNetoInicial) * 100, 2)
         # Limitar a un máximo de 100% para presentación normal
-        porcentaje_vendido = min(porcentaje_vendido, 100)
+        porcentajeVendido = min(porcentajeVendido, 100)
         
         # Calcular ganancia total de ventas reales (monto total de ventas - costo total del pallet)
-        costo_total_pallet = float(round(obj.costo_actualizado() * obj.peso_neto, 2))  # Costo total inicial del pallet
-        ganancia_total_ventas = round(float(monto_total_ventas) - costo_total_pallet, 2)
+        costoTotalPallet = float(round(obj.costo_actualizado() * obj.peso_neto, 2))  # Costo total inicial del pallet
+        gananciaTotalVentas = round(float(montoTotalVentas) - costoTotalPallet, 2)
         
         return {
-            'peso_total_vendido': peso_total_vendido,
-            'porcentaje_vendido': porcentaje_vendido,
-            'monto_total_ventas': monto_total_ventas,
-            'ganancia_total_ventas': ganancia_total_ventas,
-            'precio_promedio_kg': precio_promedio_kg,
-            'costo_por_kg': costo_por_kg,
-            'diferencia_precio': diferencia_precio,
-            'porcentaje_margen': porcentaje_margen,
-            'rentabilidad': 'positiva' if diferencia_precio > 0 else 'negativa' if diferencia_precio < 0 else 'neutra',
-            'precio_dentro_rango': self._precio_dentro_rango(precio_promedio_kg, obj),
-            'analisis': self._generar_analisis_venta(precio_promedio_kg, costo_por_kg, porcentaje_vendido, obj)
+            'pesoTotalVendido': pesoTotalVendido,
+            'porcentajeVendido': porcentajeVendido,
+            'montoTotalVentas': montoTotalVentas,
+            'gananciaTotalVentas': gananciaTotalVentas,
+            'precioPromedioKg': precioPromedioKg,
+            'costoPorKg': costoPorKg,
+            'diferenciaPrecio': diferenciaPrecio,
+            'porcentajeMargen': porcentajeMargen,
+            'rentabilidad': 'positiva' if diferenciaPrecio > 0 else 'negativa' if diferenciaPrecio < 0 else 'neutra',
+            'precioDentroRango': self._precioDentroRango(precioPromedioKg, obj),
+            'analisis': self._generarAnalisisVenta(precioPromedioKg, costoPorKg, porcentajeVendido, obj)
         }
         
-    def _precio_dentro_rango(self, precio_promedio, obj):
+    def _precioDentroRango(self, precioPromedio, obj):
         """
         Determina si el precio promedio está dentro del rango sugerido.
         """
-        min_sugerido = float(obj.precio_sugerido_min) if obj.precio_sugerido_min else None
-        max_sugerido = float(obj.precio_sugerido_max) if obj.precio_sugerido_max else None
+        minSugerido = float(obj.precio_sugerido_min) if obj.precio_sugerido_min else None
+        maxSugerido = float(obj.precio_sugerido_max) if obj.precio_sugerido_max else None
         
-        if min_sugerido is None or max_sugerido is None:
+        if minSugerido is None or maxSugerido is None:
             return None
             
-        if precio_promedio < min_sugerido:
-            return 'por_debajo'
-        elif precio_promedio > max_sugerido:
-            return 'por_encima'
+        if precioPromedio < minSugerido:
+            return 'porDebajo'
+        elif precioPromedio > maxSugerido:
+            return 'porEncima'
         else:
-            return 'dentro_rango'
+            return 'dentroRango'
             
-    def _generar_analisis_venta(self, precio_promedio, costo_por_kg, porcentaje_vendido, obj):
+    def _generarAnalisisVenta(self, precioPromedio, costoPorKg, porcentajeVendido, obj):
         """
         Genera un análisis de la venta basado en precios y porcentaje vendido.
         """
-        min_sugerido = float(obj.precio_sugerido_min) if obj.precio_sugerido_min else None
-        max_sugerido = float(obj.precio_sugerido_max) if obj.precio_sugerido_max else None
+        minSugerido = float(obj.precio_sugerido_min) if obj.precio_sugerido_min else None
+        maxSugerido = float(obj.precio_sugerido_max) if obj.precio_sugerido_max else None
         
-        if porcentaje_vendido < 50:
-            estado_venta = 'parcial'
-        elif porcentaje_vendido < 90:
-            estado_venta = 'mayoritaria'
+        if porcentajeVendido < 50:
+            estadoVenta = 'parcial'
+        elif porcentajeVendido < 90:
+            estadoVenta = 'mayoritaria'
         else:
-            estado_venta = 'completa'
+            estadoVenta = 'completa'
             
-        margen = precio_promedio - costo_por_kg
-        porcentaje_margen = (margen / costo_por_kg) * 100 if costo_por_kg > 0 else 0
+        margen = precioPromedio - costoPorKg
+        porcentajeMargen = (margen / costoPorKg) * 100 if costoPorKg > 0 else 0
         
-        if porcentaje_margen < 10:
+        if porcentajeMargen < 10:
             rendimiento = 'bajo'
-        elif porcentaje_margen < 25:
+        elif porcentajeMargen < 25:
             rendimiento = 'moderado'
         else:
             rendimiento = 'alto'
             
         # Analizar si el precio está dentro del rango sugerido
-        rango_precio = 'no_definido'
-        if min_sugerido is not None and max_sugerido is not None:
-            if precio_promedio < min_sugerido:
-                rango_precio = 'por_debajo_del_rango_sugerido'
-            elif precio_promedio > max_sugerido:
-                rango_precio = 'por_encima_del_rango_sugerido'
+        rangoPrecio = 'noDefinido'
+        if minSugerido is not None and maxSugerido is not None:
+            if precioPromedio < minSugerido:
+                rangoPrecio = 'porDebajoDelRangoSugerido'
+            elif precioPromedio > maxSugerido:
+                rangoPrecio = 'porEncimaDelRangoSugerido'
             else:
-                rango_precio = 'dentro_del_rango_sugerido'
+                rangoPrecio = 'dentroDelRangoSugerido'
         
         return {
-            'estado_venta': estado_venta,
+            'estadoVenta': estadoVenta,
             'rendimiento': rendimiento,
-            'rango_precio': rango_precio,
-            'recomendacion': self._generar_recomendacion(estado_venta, rendimiento, rango_precio, obj)
+            'rangoPrecio': rangoPrecio,
+            'recomendacion': self._generarRecomendacion(estadoVenta, rendimiento, rangoPrecio, obj)
         }
         
-    def _generar_recomendacion(self, estado_venta, rendimiento, rango_precio, obj):
+    def _generarRecomendacion(self, estadoVenta, rendimiento, rangoPrecio, obj):
         """
         Genera una recomendación basada en el análisis de venta.
         """
-        if estado_venta == 'completa':
+        if estadoVenta == 'completa':
             if rendimiento == 'alto':
                 return 'Excelente resultado. Considerar mantener estrategia de precios para futuros lotes similares.'
             elif rendimiento == 'moderado':
@@ -594,16 +670,16 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
             else:
                 return 'Lote vendido completamente pero con margen bajo. Revisar estrategia de precios o costos.'
         
-        elif estado_venta == 'mayoritaria':
-            if rango_precio == 'por_debajo_del_rango_sugerido':
+        elif estadoVenta == 'mayoritaria':
+            if rangoPrecio == 'porDebajoDelRangoSugerido':
                 return 'Considerar ajustar precio al alza para el stock restante, ya que hay buena demanda incluso con precios bajos.'
-            elif rango_precio == 'por_encima_del_rango_sugerido':
+            elif rangoPrecio == 'porEncimaDelRangoSugerido':
                 return 'Buen rendimiento con precio alto. Mantener precio para stock restante.'
             else:
                 return 'Venta progresando bien. Mantener estrategia actual para el stock restante.'
         
         else:  # parcial
-            if rendimiento == 'bajo' or rango_precio == 'por_encima_del_rango_sugerido':
+            if rendimiento == 'bajo' or rangoPrecio == 'porEncimaDelRangoSugerido':
                 return 'Considerar reducir precio para acelerar la venta del stock restante.'
             else:
                 return 'Revisar estrategia de ventas. El lote no está teniendo la rotación esperada.'
