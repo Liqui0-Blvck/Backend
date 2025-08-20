@@ -46,10 +46,10 @@ class ReportSummaryView(APIView):
         )
         
         total_ventas_hoy = ventas_hoy.count()
-        total_kg_hoy = ventas_hoy.aggregate(total=Sum('peso_vendido'))['total'] or 0
-        total_ingresos_hoy = ventas_hoy.aggregate(
-            total=Sum(F('peso_vendido') * F('precio_kg'), output_field=DecimalField())
-        )['total'] or 0
+        total_kg_hoy = ventas_hoy.annotate(peso_total=Sum('items__peso_vendido')).aggregate(total=Sum('peso_total'))['total'] or 0
+        total_ingresos_hoy = ventas_hoy.annotate(
+            subtotal=Sum(F('items__peso_vendido') * F('items__precio_kg'), output_field=DecimalField())
+        ).aggregate(total=Sum('subtotal'))['total'] or 0
         
         # Ventas de esta semana
         ventas_semana = Sale.objects.filter(
@@ -58,10 +58,10 @@ class ReportSummaryView(APIView):
         )
         
         total_ventas_semana = ventas_semana.count()
-        total_kg_semana = ventas_semana.aggregate(total=Sum('peso_vendido'))['total'] or 0
-        total_ingresos_semana = ventas_semana.aggregate(
-            total=Sum(F('peso_vendido') * F('precio_kg'), output_field=DecimalField())
-        )['total'] or 0
+        total_kg_semana = ventas_semana.annotate(peso_total=Sum('items__peso_vendido')).aggregate(total=Sum('peso_total'))['total'] or 0
+        total_ingresos_semana = ventas_semana.annotate(
+            subtotal=Sum(F('items__peso_vendido') * F('items__precio_kg'), output_field=DecimalField())
+        ).aggregate(total=Sum('subtotal'))['total'] or 0
         
         # Ventas de este mes
         ventas_mes = Sale.objects.filter(
@@ -70,18 +70,18 @@ class ReportSummaryView(APIView):
         )
         
         total_ventas_mes = ventas_mes.count()
-        total_kg_mes = ventas_mes.aggregate(total=Sum('peso_vendido'))['total'] or 0
-        total_ingresos_mes = ventas_mes.aggregate(
-            total=Sum(F('peso_vendido') * F('precio_kg'), output_field=DecimalField())
-        )['total'] or 0
+        total_kg_mes = ventas_mes.annotate(peso_total=Sum('items__peso_vendido')).aggregate(total=Sum('peso_total'))['total'] or 0
+        total_ingresos_mes = ventas_mes.annotate(
+            subtotal=Sum(F('items__peso_vendido') * F('items__precio_kg'), output_field=DecimalField())
+        ).aggregate(total=Sum('subtotal'))['total'] or 0
         
         # Total histórico
         ventas_total = Sale.objects.filter(business=perfil.business)
         total_ventas_historico = ventas_total.count()
-        total_kg_historico = ventas_total.aggregate(total=Sum('peso_vendido'))['total'] or 0
-        total_ingresos_historico = ventas_total.aggregate(
-            total=Sum(F('peso_vendido') * F('precio_kg'), output_field=DecimalField())
-        )['total'] or 0
+        total_kg_historico = ventas_total.annotate(peso_total=Sum('items__peso_vendido')).aggregate(total=Sum('peso_total'))['total'] or 0
+        total_ingresos_historico = ventas_total.annotate(
+            subtotal=Sum(F('items__peso_vendido') * F('items__precio_kg'), output_field=DecimalField())
+        ).aggregate(total=Sum('subtotal'))['total'] or 0
         
         # Resumen de inventario
         
@@ -94,7 +94,7 @@ class ReportSummaryView(APIView):
         reservas = StockReservation.objects.filter(
             lote__business=perfil.business
         ).values('lote').annotate(
-            total_reservado=Sum('cantidad_kg')
+            total_reservado=Sum('kg_reservados')
         )
         
         reservas_dict = {item['lote']: item['total_reservado'] for item in reservas}
@@ -171,9 +171,9 @@ class ReportSummaryView(APIView):
                 )
             
             total_ventas_turno = ventas_turno.count()
-            total_ingresos_turno = ventas_turno.aggregate(
-                total=Sum(F('peso_vendido') * F('precio_kg'), output_field=DecimalField())
-            )['total'] or 0
+            total_ingresos_turno = ventas_turno.annotate(
+                subtotal=Sum(F('items__peso_vendido') * F('items__precio_kg'), output_field=DecimalField())
+            ).aggregate(total=Sum('subtotal'))['total'] or 0
             
             ultimos_turnos_data.append({
                 'usuario_nombre': usuario_nombre,
@@ -1239,8 +1239,8 @@ class SalesReportView(APIView):
             fecha_dia=TruncDate('created_at')
         ).values('fecha_dia').annotate(
             total_ventas=Count('id'),
-            total_kg=Sum('peso_vendido'),
-            total_ingresos=Sum('total', output_field=DecimalField())
+            total_kg=Sum('items__peso_vendido'),
+            total_ingresos=Sum('items__peso_vendido' * 'items__precio_kg', output_field=DecimalField())
         ).order_by('fecha_dia')
         
         # Agregados por vendedor
@@ -1249,8 +1249,8 @@ class SalesReportView(APIView):
             vendedor_nombre=F('vendedor__first_name')
         ).annotate(
             total_ventas=Count('id'),
-            total_kg=Sum('peso_vendido'),
-            total_ingresos=Sum('total', output_field=DecimalField())
+            total_kg=Sum('items__peso_vendido'),
+            total_ingresos=Sum('items__peso_vendido' * 'items__precio_kg', output_field=DecimalField())
         ).order_by('-total_ingresos')
         
         # Modificar para agregar nombre completo
@@ -1264,8 +1264,8 @@ class SalesReportView(APIView):
             producto_nombre=F('lote__producto__nombre')
         ).annotate(
             total_ventas=Count('id'),
-            total_kg=Sum('peso_vendido'),
-            total_ingresos=Sum('total', output_field=DecimalField())
+            total_kg=Sum('items__peso_vendido'),
+            total_ingresos=Sum('items__peso_vendido' * 'items__precio_kg', output_field=DecimalField())
         ).order_by('-total_kg')
         
         # Calcular totales
@@ -1356,9 +1356,9 @@ class ShiftReportView(APIView):
             
             # Calcular totales de ventas
             total_ventas = ventas.count()
-            total_kg = ventas.aggregate(total=Sum('peso_vendido'))['total'] or 0
+            total_kg = ventas.aggregate(total=Sum('items__peso_vendido'))['total'] or 0
             total_ingresos = ventas.aggregate(
-                total=Sum('total', output_field=DecimalField())
+                total=Sum('items__peso_vendido' * 'items__precio_kg', output_field=DecimalField())
             )['total'] or 0
             
             # Calcular duración en minutos

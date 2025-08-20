@@ -145,8 +145,22 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
 
     def get_peso_reservado(self, obj):
         from .models import StockReservation
-        total = StockReservation.objects.filter(lote=obj).aggregate(total=Sum('cantidad_kg'))['total'] or 0
-        return float(total)
+        from sales.models import SalePendingItem
+        
+        # Reservas directas del lote
+        reservas_directas = StockReservation.objects.filter(
+            lote=obj,
+            estado='en_proceso'
+        ).aggregate(total=Sum('kg_reservados'))['total'] or 0
+        
+        # Reservas a través de ventas pendientes
+        reservas_pendientes = SalePendingItem.objects.filter(
+            lote=obj,
+            venta_pendiente__estado='pendiente'
+        ).aggregate(total=Sum('cantidad_kg'))['total'] or 0
+        
+        total = float(reservas_directas) + float(reservas_pendientes)
+        return total
 
     def get_peso_disponible(self, obj):
         neto = float(obj.peso_neto or 0)
@@ -347,7 +361,7 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
         movimientos = []
         
         # Obtener historial de cambios de estado de maduración
-        maduration_history = MadurationHistory.objects.filter(lote=obj).order_by('fecha_cambio')
+        maduration_history = MadurationHistory.objects.filter(lote__uid=obj.uid).order_by('fecha_cambio')
         
         for i, history in enumerate(maduration_history):
             estado_anterior = None
@@ -366,75 +380,10 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
             })
         
         # Obtener historial de ventas
-        ventas = Sale.objects.filter(lote=obj).order_by('created_at')
-        
+        ventas = Sale.objects.filter(items__lote=obj).distinct()        
         for i, venta in enumerate(ventas):
-            movimientos.append({
-                'id': len(maduration_history) + i + 1,
-                'fecha': venta.created_at.isoformat() if hasattr(venta.created_at, 'isoformat') else str(venta.created_at),
-                'tipo': 'venta',
-                'estado_anterior': None,
-                'estado_nuevo': None,
-                'cantidad': float(venta.peso_vendido),
-                'usuario': f"{venta.vendedor.first_name} {venta.vendedor.last_name}".strip() if hasattr(venta, 'vendedor') and venta.vendedor else "Sistema",
-                'notas': f"Venta #{venta.id} - {venta.cliente.nombre if venta.cliente else getattr(venta, 'nombre_cliente', 'Cliente no especificado')}"
-            })
-        
-        # Obtener otros cambios importantes del historial (simple_history)
-        historical_records = obj.history.all().order_by('history_date')
-        
-        for i, record in enumerate(historical_records):
-            # Solo registrar cambios significativos (cantidad_cajas, peso_neto, etc.)
-            if i > 0:
-                prev_record = historical_records[i-1]
-                
-                # Cambio en cantidad de cajas
-                if record.cantidad_cajas != prev_record.cantidad_cajas:
-                    movimientos.append({
-                        'id': len(maduration_history) + len(ventas) + i,
-                        'fecha': record.history_date.isoformat() if hasattr(record.history_date, 'isoformat') else str(record.history_date),
-                        'tipo': 'ajuste_inventario',
-                        'estado_anterior': None,
-                        'estado_nuevo': None,
-                        'cantidad': record.cantidad_cajas - prev_record.cantidad_cajas,
-                        'usuario': f"{record.history_user.first_name} {record.history_user.last_name}".strip() if record.history_user else "Sistema",
-                        'notas': f"Ajuste de {prev_record.cantidad_cajas} a {record.cantidad_cajas} cajas"
-                    })
-        
-        # Ordenar todos los movimientos por fecha
-        return sorted(movimientos, key=lambda x: x['fecha'])
-
-    def get_historial_precios(self, obj):
-        """
-        Genera un historial de precios basado en los cambios históricos del lote
-        y las ventas asociadas.
-        """
-        historial = []
-        
-        # Obtener ventas para ver precios aplicados
-        ventas = Sale.objects.filter(lote=obj).order_by('created_at')
-        
-        for i, venta in enumerate(ventas):
-            historial.append({
-                'id': i + 1,
-                'fecha': venta.created_at.isoformat() if hasattr(venta.created_at, 'isoformat') else str(venta.created_at),
-                'precio': float(venta.precio_kg),
-                'peso_vendido': float(venta.peso_vendido),
-                'usuario': f"{venta.vendedor.first_name} {venta.vendedor.last_name}".strip() if hasattr(venta, 'vendedor') and venta.vendedor else "Sistema",
-                'notas': f"Venta #{venta.id} - {venta.cliente.nombre if venta.cliente else getattr(venta, 'nombre_cliente', 'Cliente no especificado')}"
-            })
-        
-        # Si no hay ventas, agregar al menos el precio recomendado actual
-        if not historial:
-            historial.append({
-                'id': 1,
-                'fecha': timezone.now().isoformat(),
-                'precio': self.get_precio_recomendado_kg(obj),
-                'usuario': "Sistema",
-                'notas': "Precio recomendado inicial"
-            })
-        
-        return historial
+            # Obtener el peso vendido desde los items de la venta
+            peso_vendido = venta.items.filter(lote=obj).aggregate(total=Sum('peso_vendido'))['total'] or 0
         
     def get_valores_llegada(self, obj):
         """
@@ -469,6 +418,39 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
                 'precio_sugerido_min': float(obj.precio_sugerido_min) if obj.precio_sugerido_min else None,
                 'precio_sugerido_max': float(obj.precio_sugerido_max) if obj.precio_sugerido_max else None
             }
+    
+    def get_historial_precios(self, obj):
+        """
+        Genera un historial de precios basado en las ventas del lote.
+        """
+        historial = []
+        
+        # Obtener items de venta para este lote
+        from sales.models import SaleItem
+        items_venta = SaleItem.objects.filter(lote=obj).select_related('venta').order_by('venta__created_at')
+        
+        for i, item in enumerate(items_venta):
+            historial.append({
+                'id': i + 1,
+                'fecha': item.venta.created_at.isoformat() if hasattr(item.venta.created_at, 'isoformat') else str(item.venta.created_at),
+                'precio': float(item.precio_kg) if item.precio_kg else 0,
+                'peso_vendido': float(item.peso_vendido) if item.peso_vendido else 0,
+                'usuario': f"{item.venta.vendedor.first_name} {item.venta.vendedor.last_name}".strip() if hasattr(item.venta, 'vendedor') and item.venta.vendedor else "Sistema",
+                'notas': f"Venta #{item.venta.id} - {item.venta.cliente.nombre if item.venta.cliente else getattr(item.venta, 'nombre_cliente', 'Cliente no especificado')}"
+            })
+        
+        # Si no hay ventas, agregar al menos el precio recomendado actual
+        if not historial:
+            historial.append({
+                'id': 1,
+                'fecha': timezone.now().isoformat(),
+                'precio': self.get_precio_recomendado_kg(obj),
+                'peso_vendido': 0,
+                'usuario': "Sistema",
+                'notas': "Precio recomendado inicial"
+            })
+        
+        return historial
         
     def get_comparacion_venta(self, obj):
         """
@@ -476,11 +458,13 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
         """
         # Obtener ventas para calcular totales
         from sales.models import Sale
-        ventas = Sale.objects.filter(lote=obj)
+        ventas = Sale.objects.filter(items__lote=obj).distinct()
         
         # Calcular totales de venta con redondeo adecuado
-        peso_total_vendido = round(sum(float(venta.peso_vendido) for venta in ventas), 2)
-        monto_total_ventas = round(sum(float(venta.peso_vendido * venta.precio_kg) for venta in ventas), 2)
+        from sales.models import SaleItem
+        items_lote = SaleItem.objects.filter(lote=obj)
+        peso_total_vendido = round(sum(float(item.peso_vendido) for item in items_lote), 2)
+        monto_total_ventas = round(sum(float(item.subtotal) for item in items_lote), 2)
         precio_promedio_kg = round(monto_total_ventas / peso_total_vendido, 2) if peso_total_vendido > 0 else 0
         
         # Obtener valores iniciales del historial
