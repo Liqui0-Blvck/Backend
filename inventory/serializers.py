@@ -848,7 +848,7 @@ class GoodsReceptionListSerializer(serializers.ModelSerializer):
         model = GoodsReception
         fields = (
             'uid', 'numero_guia', 'fecha_recepcion', 'proveedor_nombre', 'numero_guia_proveedor',
-            'recibido_por_nombre', 'total_pallets', 'total_cajas', 'estado'
+            'recibido_por_nombre', 'total_pallets', 'total_cajas', 'estado', 'estado_pago'
         )
     
     def get_proveedor_nombre(self, obj):
@@ -891,7 +891,7 @@ class GoodsReceptionSerializer(serializers.ModelSerializer):
         model = GoodsReception
         fields = (
             'uid', 'numero_guia', 'fecha_recepcion', 'proveedor', 'proveedor_info', 'numero_guia_proveedor', 'recibido_por',
-            'revisado_por', 'recibido_por_nombre', 'revisado_por_nombre', 'estado', 'observaciones', 
+            'revisado_por', 'recibido_por_nombre', 'revisado_por_nombre', 'estado', 'observaciones', 'estado_pago', 
             'total_pallets', 'total_cajas', 'total_peso_bruto', 'business', 'detalles',
             'en_concesion', 'comision_por_kilo', 'fecha_limite_concesion',
         )
@@ -1190,19 +1190,38 @@ class PalletHistoryDetailSerializer(serializers.ModelSerializer):
             }
             
     def get_ganancia_pallet(self, obj):
-        """Calcula la ganancia total del pallet (total generado - costo total)"""
+        """Calcula la ganancia total del pallet (total generado - costo de lo vendido)"""
         # Convertir todos los valores a float para evitar problemas de tipo
         total_generado = float(self.get_total_generado(obj))
-        costo_total = float(self.get_costo_total_pallet(obj))
-        return total_generado - costo_total
+        
+        # Calculamos el costo solo de lo que se ha vendido, no del pallet completo
+        if obj.producto and obj.producto.tipo_producto == 'palta':
+            peso_vendido = self.get_peso_vendido(obj)
+            costo_por_kg = float(obj.costo_inicial or 0)
+            costo_vendido = round(peso_vendido * costo_por_kg, 2)
+        else:  # tipo 'otro'
+            unidades_vendidas = self.get_unidades_vendidas(obj)
+            costo_por_unidad = float(obj.costo_inicial or 0) / max(1, obj.unidades_por_caja)
+            costo_vendido = round(unidades_vendidas * costo_por_unidad, 2)
+            
+        return total_generado - costo_vendido
     
     def get_margen_ganancia(self, obj):
         """Calcula el margen de ganancia como porcentaje"""
-        costo_total = self.get_costo_total_pallet(obj)
+        # Calculamos el costo solo de lo que se ha vendido, no del pallet completo
+        if obj.producto and obj.producto.tipo_producto == 'palta':
+            peso_vendido = self.get_peso_vendido(obj)
+            costo_por_kg = float(obj.costo_inicial or 0)
+            costo_vendido = round(peso_vendido * costo_por_kg, 2)
+        else:  # tipo 'otro'
+            unidades_vendidas = self.get_unidades_vendidas(obj)
+            costo_por_unidad = float(obj.costo_inicial or 0) / max(1, obj.unidades_por_caja)
+            costo_vendido = round(unidades_vendidas * costo_por_unidad, 2)
+        
         ganancia = self.get_ganancia_pallet(obj)
         
-        if costo_total > 0:
-            return round((ganancia / costo_total) * 100, 2)
+        if costo_vendido > 0:
+            return round((ganancia / costo_vendido) * 100, 2)
         elif ganancia > 0:
             # Si hay ganancia pero no hay costo registrado, el margen es técnicamente infinito
             # pero reportamos 100% como valor máximo
@@ -1232,22 +1251,22 @@ class PalletHistoryDetailSerializer(serializers.ModelSerializer):
             
         try:
             if obj.producto.tipo_producto == 'palta':
-                # Para paltas, el costo es por peso bruto original
-                # Usamos el peso bruto ya que es el dato original del pallet
-                peso_bruto = float(obj.peso_bruto or 0)
+                # Para paltas, el costo es por peso neto (peso vendible)
+                # Usamos el peso neto ya que es el peso real vendible
+                peso_neto = float(obj.peso_neto or 0)
                 costo_inicial = float(obj.costo_inicial or 0)
                 
                 # Si tenemos datos específicos en datos_especificos, los usamos
                 datos_especificos = self.get_datos_especificos(obj)
-                if datos_especificos and 'peso_bruto' in datos_especificos and datos_especificos['peso_bruto'] > 0:
-                    peso_bruto = datos_especificos['peso_bruto']
+                if datos_especificos and 'peso_neto' in datos_especificos and datos_especificos['peso_neto'] > 0:
+                    peso_neto = datos_especificos['peso_neto']
                 
-                return round(peso_bruto * costo_inicial, 2)
+                return round(peso_neto * costo_inicial, 2)
             else:  # tipo 'otro'
-                # Para otros productos, el costo es por cantidad de cajas
-                cantidad_cajas = float(obj.cantidad_cajas or 0)
-                costo_inicial = float(obj.costo_inicial or 0)
-                return round(cantidad_cajas * costo_inicial, 2)
+                # Para otros productos, el costo es por cantidad de unidades
+                cantidad_unidades = float(obj.cantidad_unidades or 0)
+                costo_por_unidad = float(obj.costo_inicial or 0) / max(1, obj.unidades_por_caja)
+                return round(cantidad_unidades * costo_por_unidad, 2)
         except (TypeError, ValueError):
             # En caso de error de conversión, devolver 0
             return 0.0
@@ -1264,46 +1283,63 @@ class PalletHistoryDetailSerializer(serializers.ModelSerializer):
             }
         
         total_generado = float(self.get_total_generado(obj))
-        costo_total = float(self.get_costo_total_pallet(obj))
-        ganancia_total = total_generado - costo_total
         
-        # Calcular margen de ganancia
-        margen_ganancia = 0
-        if costo_total > 0:
-            margen_ganancia = round((ganancia_total / costo_total) * 100, 2)
-        elif ganancia_total > 0:
-            # Si hay ganancia pero no hay costo registrado, reportamos 100%
-            margen_ganancia = 100.0
-        
+        # Calculamos el costo solo de lo que se ha vendido, no del pallet completo
         if obj.producto.tipo_producto == 'palta':
             # Para paltas
             peso_total_vendido = self.get_peso_vendido(obj)
+            costo_por_kg = float(obj.costo_inicial or 0)
+            costo_vendido = round(peso_total_vendido * costo_por_kg, 2)
+            
             precio_promedio_kg = 0
             if peso_total_vendido > 0:
                 precio_promedio_kg = round(total_generado / peso_total_vendido, 2)
+            
+            ganancia_total = total_generado - costo_vendido
+            
+            # Calcular margen de ganancia sobre lo vendido
+            margen_ganancia = 0
+            if costo_vendido > 0:
+                margen_ganancia = round((ganancia_total / costo_vendido) * 100, 2)
+            elif ganancia_total > 0:
+                # Si hay ganancia pero no hay costo registrado, reportamos 100%
+                margen_ganancia = 100.0
                 
             return {
                 'num_ventas': num_ventas,
                 'peso_total_vendido': peso_total_vendido,
                 'precio_promedio_kg': precio_promedio_kg,
                 'total_generado': total_generado,
-                'costo_total': costo_total,
+                'costo_vendido': costo_vendido,
                 'ganancia_total': ganancia_total,
                 'margen_ganancia': margen_ganancia
             }
         else:  # tipo 'otro'
             # Para otros productos
             unidades_total_vendidas = self.get_unidades_vendidas(obj)
+            costo_por_unidad = float(obj.costo_inicial or 0) / max(1, obj.unidades_por_caja)
+            costo_vendido = round(unidades_total_vendidas * costo_por_unidad, 2)
+            
             precio_promedio_unidad = 0
             if unidades_total_vendidas > 0:
                 precio_promedio_unidad = round(total_generado / unidades_total_vendidas, 2)
+            
+            ganancia_total = total_generado - costo_vendido
+            
+            # Calcular margen de ganancia sobre lo vendido
+            margen_ganancia = 0
+            if costo_vendido > 0:
+                margen_ganancia = round((ganancia_total / costo_vendido) * 100, 2)
+            elif ganancia_total > 0:
+                # Si hay ganancia pero no hay costo registrado, reportamos 100%
+                margen_ganancia = 100.0
                 
             return {
                 'num_ventas': num_ventas,
                 'unidades_total_vendidas': unidades_total_vendidas,
                 'precio_promedio_unidad': precio_promedio_unidad,
                 'total_generado': total_generado,
-                'costo_total': costo_total,
+                'costo_vendido': costo_vendido,
                 'ganancia_total': ganancia_total,
                 'margen_ganancia': margen_ganancia
             }

@@ -520,6 +520,9 @@ def crear_lotes_al_aprobar_recepcion(sender, instance, created, **kwargs):
                             fecha_limite_concesion=detalle.fecha_limite_concesion,
                             # El campo propietario_original espera un objeto Supplier, no un string
                             propietario_original=instance.proveedor if detalle.en_concesion else None,
+                            # Precios sugeridos
+                            precio_sugerido_min=detalle.precio_sugerido_min,
+                            precio_sugerido_max=detalle.precio_sugerido_max,
                         )
                         
                         # Guardar el lote
@@ -562,6 +565,19 @@ def actualizar_lote_desde_detalle(sender, instance, created, **kwargs):
         lote.cantidad_cajas = instance.cantidad_cajas
         lote.peso_bruto = instance.peso_bruto
         lote.peso_neto = instance.peso_neto
+        
+        # Actualizar campos de precios sugeridos
+        if instance.precio_sugerido_min is not None:
+            lote.precio_sugerido_min = instance.precio_sugerido_min
+        if instance.precio_sugerido_max is not None:
+            lote.precio_sugerido_max = instance.precio_sugerido_max
+            
+        # Actualizar información de concesión
+        lote.en_concesion = instance.en_concesion
+        lote.comision_por_kilo = instance.comision_por_kilo
+        lote.fecha_limite_concesion = instance.fecha_limite_concesion
+        
+        # No hay campo temperatura en FruitLot, así que no actualizamos este campo
         
         # Si el estado de maduración cambió, actualizar y registrar
         if instance.estado_maduracion and lote.estado_maduracion != instance.estado_maduracion:
