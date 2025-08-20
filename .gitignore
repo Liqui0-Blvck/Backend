@@ -69,18 +69,18 @@ venv.bak
 .env.development
 
 # Docker y configuración de despliegue
-.dockerignore
-docker-compose*.yml
-Dockerfile*
-docker/
-docker-compose.override.yml
-docker-compose.prod.yml
-docker-compose.dev.yml
-docker-compose.local.yml
-docker-entrypoint.sh
-docker-entrypoint*.sh
-wait-for-it.sh
-wait-for*.sh
+# .dockerignore
+# docker-compose*.yml
+# Dockerfile*
+# docker/
+# docker-compose.override.yml
+# docker-compose.prod.yml
+# docker-compose.dev.yml
+# docker-compose.local.yml
+# docker-entrypoint.sh
+# docker-entrypoint*.sh
+# wait-for-it.sh
+# wait-for*.sh
 
 # Certificados SSL y seguridad
 ssl/
@@ -148,35 +148,35 @@ __pycache__/
 .dmypy.json
 dmypy.json
 
-# Archivos específicos de producción y configuración del servidor
-prod_settings.py
-prod_*.py
-production_*.py
-production.py
-settings_prod.py
-settings_production.py
-local_settings.py
-server_config.py
-server_config*.py
-gunicorn*.py
-gunicorn*.conf
-nginx*.conf
-apache*.conf
-supervisor*.conf
-uwsgi*.ini
-postgres*.conf
-redis*.conf
-celery*.py
-celeryconfig*.py
-celerybeat*.py
-celerybeat-schedule
-.digitalocean*
-.netlify*
-.heroku*
-.aws*
-.gcloud*
-.azure*
+# # Archivos específicos de producción y configuración del servidor
+# prod_settings.py
+# prod_*.py
+# production_*.py
+# production.py
+# settings_prod.py
+# settings_production.py
+# local_settings.py
+# server_config.py
+# server_config*.py
+# gunicorn*.py
+# gunicorn*.conf
+# nginx*.conf
+# apache*.conf
+# supervisor*.conf
+# uwsgi*.ini
+# postgres*.conf
+# redis*.conf
+# celery*.py
+# celeryconfig*.py
+# celerybeat*.py
+# celerybeat-schedule
+# .digitalocean*
+# .netlify*
+# .heroku*
+# .aws*
+# .gcloud*
+# .azure*
 
-# Archivos de respaldo
-*.backup
-*_backup*
+# # Archivos de respaldo
+# *.backup
+# *_backup*

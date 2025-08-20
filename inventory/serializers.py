@@ -1,12 +1,329 @@
 from rest_framework import serializers
-from .models import BoxType, FruitLot, StockReservation, Product, GoodsReception, Supplier, ReceptionDetail, SupplierPayment
-from sales.models import Customer
-from django.db.models import Sum
+from .models import BoxType, FruitLot, StockReservation, Product, GoodsReception, Supplier, ReceptionDetail, SupplierPayment, ConcessionSettlement, ConcessionSettlementDetail
+from sales.models import Customer, SaleItem
+from django.db.models import Sum, Max, F
+from decimal import Decimal
 
 class BoxTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = BoxType
         fields = ('uid', 'nombre', 'descripcion', 'peso_caja', 'peso_pallet', 'business')
+
+class SupplierSerializer(serializers.ModelSerializer):
+    """
+    Serializador detallado para proveedores que incluye toda la información necesaria
+    para mostrar en el frontend, incluyendo recepciones, pagos, liquidaciones y pallets.
+    """
+    # Campos calculados básicos
+    total_deuda = serializers.SerializerMethodField()
+    total_pagado = serializers.SerializerMethodField()
+    recepciones_pendientes = serializers.SerializerMethodField()
+    
+    # Campos para contadores y resúmenes
+    cantidad_recepciones = serializers.SerializerMethodField()
+    cantidad_liquidaciones = serializers.SerializerMethodField()
+    cantidad_pallets = serializers.SerializerMethodField()
+    cantidad_cajas = serializers.SerializerMethodField()
+    total_kg_recepcionados = serializers.SerializerMethodField()
+    
+    # Campos para últimas actividades
+    ultima_recepcion = serializers.SerializerMethodField()
+    ultima_liquidacion = serializers.SerializerMethodField()
+    ultimo_pago = serializers.SerializerMethodField()
+    
+    # Campos para detalles de pallets
+    detalle_pallets = serializers.SerializerMethodField()
+    
+    # Campos para análisis financiero
+    resumen_pagos = serializers.SerializerMethodField()
+    resumen_liquidaciones = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Supplier
+        fields = ('uid', 'nombre', 'rut', 'direccion', 'telefono', 'email', 'contacto', 'observaciones', 
+                 'business', 'activo', 'created_at', 'updated_at',
+                 'total_deuda', 'total_pagado', 'recepciones_pendientes',
+                 'cantidad_recepciones', 'cantidad_liquidaciones', 'cantidad_pallets', 'cantidad_cajas',
+                 'total_kg_recepcionados', 'ultima_recepcion', 'ultima_liquidacion', 'ultimo_pago',
+                 'detalle_pallets', 'resumen_pagos', 'resumen_liquidaciones')
+    
+    def get_total_deuda(self, obj):
+        # Calcular el total de deuda sumando los montos totales de todas las recepciones
+        total = obj.recepciones.aggregate(total=Sum('monto_total'))['total'] or 0
+        
+        # Restar los pagos realizados
+        pagos = SupplierPayment.objects.filter(recepcion__proveedor=obj)
+        total_pagado = pagos.aggregate(total=Sum('monto'))['total'] or 0
+        
+        return total - total_pagado
+        
+    def get_total_pagado(self, obj):
+        """Suma todos los pagos realizados al proveedor"""
+        pagos = SupplierPayment.objects.filter(recepcion__proveedor=obj)
+        return pagos.aggregate(total=Sum('monto'))['total'] or 0
+    
+    def get_recepciones_pendientes(self, obj):
+        """Retorna las recepciones pendientes de pago"""
+        # Obtener todas las recepciones del proveedor
+        recepciones = obj.recepciones.all()
+        
+        # Lista para almacenar las recepciones pendientes
+        pendientes = []
+        
+        for recepcion in recepciones:
+            # Calcular el monto total de la recepción
+            monto_total = recepcion.monto_total or 0
+            
+            # Calcular el total pagado para esta recepción
+            pagos = recepcion.pagos.aggregate(total=Sum('monto'))['total'] or 0
+            
+            # Si hay saldo pendiente, agregar a la lista
+            if monto_total > pagos:
+                pendientes.append({
+                    'uid': recepcion.uid,
+                    'numero_guia': recepcion.numero_guia,
+                    'fecha_recepcion': recepcion.fecha_recepcion,
+                    'monto_total': monto_total,
+                    'monto_pagado': pagos,
+                    'saldo_pendiente': monto_total - pagos
+                })
+        
+        return pendientes
+    
+    def get_cantidad_recepciones(self, obj):
+        """Retorna el número total de recepciones del proveedor"""
+        return obj.recepciones.count()
+    
+    def get_cantidad_liquidaciones(self, obj):
+        """Retorna el número total de liquidaciones del proveedor"""
+        return obj.liquidaciones.count()
+    
+    def get_cantidad_pallets(self, obj):
+        """Retorna el número total de pallets recibidos del proveedor"""
+        return sum(recepcion.total_pallets for recepcion in obj.recepciones.all())
+    
+    def get_cantidad_cajas(self, obj):
+        """Retorna el número total de cajas recibidas del proveedor"""
+        return sum(recepcion.total_cajas for recepcion in obj.recepciones.all())
+    
+    def get_total_kg_recepcionados(self, obj):
+        """Retorna el total de kilogramos recibidos del proveedor"""
+        return sum(recepcion.total_peso_bruto for recepcion in obj.recepciones.all())
+    
+    def get_ultima_recepcion(self, obj):
+        """Retorna la información de la última recepción del proveedor"""
+        ultima = obj.recepciones.order_by('-fecha_recepcion').first()
+        if ultima:
+            return {
+                'uid': ultima.uid,
+                'numero_guia': ultima.numero_guia,
+                'fecha_recepcion': ultima.fecha_recepcion,
+                'monto_total': ultima.monto_total,
+                'total_pallets': ultima.total_pallets,
+                'total_cajas': ultima.total_cajas
+            }
+        return None
+    
+    def get_ultima_liquidacion(self, obj):
+        """Retorna la información de la última liquidación del proveedor"""
+        ultima = obj.liquidaciones.order_by('-fecha_liquidacion').first()
+        if ultima:
+            return {
+                'uid': ultima.uid,
+                'fecha_liquidacion': ultima.fecha_liquidacion,
+                'total_kilos_vendidos': ultima.total_kilos_vendidos,
+                'total_ventas': ultima.total_ventas,
+                'monto_a_liquidar': ultima.monto_a_liquidar,
+                'estado': ultima.estado
+            }
+        return None
+    
+    def get_ultimo_pago(self, obj):
+        """Retorna la información del último pago realizado al proveedor"""
+        ultimo = SupplierPayment.objects.filter(recepcion__proveedor=obj).order_by('-fecha_pago').first()
+        if ultimo:
+            return {
+                'uid': ultimo.uid,
+                'fecha_pago': ultimo.fecha_pago,
+                'monto': ultimo.monto,
+                'metodo_pago': ultimo.metodo_pago,
+                'recepcion': ultimo.recepcion.numero_guia
+            }
+        return None
+    
+    def get_detalle_pallets(self, obj):
+        """Retorna información detallada de los pallets recibidos del proveedor"""
+        # Obtener todas las recepciones del proveedor
+        recepciones = obj.recepciones.all()
+        
+        # Lista para almacenar los detalles de pallets
+        detalles = []
+        
+        for recepcion in recepciones:
+            for detalle in recepcion.detalles.all():
+                detalles.append({
+                    'uid': detalle.uid,
+                    'numero_pallet': detalle.numero_pallet,
+                    'producto': detalle.producto.nombre if detalle.producto else 'No especificado',
+                    'calibre': detalle.calibre or 'No especificado',
+                    'cantidad_cajas': detalle.cantidad_cajas,
+                    'peso_bruto': detalle.peso_bruto,
+                    'peso_neto': detalle.peso_neto,
+                    'calidad': detalle.get_calidad_display(),
+                    'fecha_recepcion': recepcion.fecha_recepcion,
+                    'numero_guia': recepcion.numero_guia,
+                    'lote_id': detalle.lote_creado.id if detalle.lote_creado else None
+                })
+        
+        return detalles
+    
+    def get_resumen_pagos(self, obj):
+        """Retorna un resumen de los pagos realizados al proveedor"""
+        # Obtener todos los pagos del proveedor
+        pagos = SupplierPayment.objects.filter(recepcion__proveedor=obj).order_by('-fecha_pago')
+        
+        # Lista para almacenar los pagos
+        lista_pagos = []
+        
+        for pago in pagos:
+            lista_pagos.append({
+                'uid': pago.uid,
+                'fecha_pago': pago.fecha_pago,
+                'monto': pago.monto,
+                'metodo_pago': pago.get_metodo_pago_display(),
+                'recepcion': pago.recepcion.numero_guia,
+                'notas': pago.notas
+            })
+        
+        return lista_pagos
+    
+    def get_resumen_liquidaciones(self, obj):
+        """Retorna un resumen de las liquidaciones del proveedor"""
+        # Obtener todas las liquidaciones del proveedor
+        liquidaciones = obj.liquidaciones.all().order_by('-fecha_liquidacion')
+        
+        # Lista para almacenar las liquidaciones
+        lista_liquidaciones = []
+        
+        for liquidacion in liquidaciones:
+            # Obtener detalles de la liquidación
+            detalles = []
+            for detalle in liquidacion.detalles.all():
+                detalles.append({
+                    'venta_id': detalle.venta.id,
+                    'lote_id': detalle.lote.id,
+                    'cantidad_kilos': detalle.cantidad_kilos,
+                    'precio_venta': detalle.precio_venta,
+                    'comision': detalle.comision,
+                    'monto_liquidado': detalle.monto_liquidado
+                })
+            
+            lista_liquidaciones.append({
+                'uid': liquidacion.uid,
+                'fecha_liquidacion': liquidacion.fecha_liquidacion,
+                'total_kilos_vendidos': liquidacion.total_kilos_vendidos,
+                'total_ventas': liquidacion.total_ventas,
+                'total_comision': liquidacion.total_comision,
+                'monto_a_liquidar': liquidacion.monto_a_liquidar,
+                'estado': liquidacion.get_estado_display(),
+                'detalles': detalles
+            })
+        
+        return lista_liquidaciones
+    
+    def get_cantidad_recepciones(self, obj):
+        """Retorna el número total de recepciones del proveedor"""
+        return obj.recepciones.count()
+    
+    def get_ultima_recepcion(self, obj):
+        """Retorna información sobre la última recepción del proveedor"""
+        ultima = obj.recepciones.order_by('-fecha_recepcion').first()
+        if not ultima:
+            return None
+            
+        return {
+            'uid': str(ultima.uid),
+            'numero_guia': ultima.numero_guia,
+            'fecha_recepcion': ultima.fecha_recepcion,
+            'monto_total': float(ultima.monto_total)
+        }
+    
+    def get_cantidad_liquidaciones(self, obj):
+        """Retorna el número total de liquidaciones del proveedor"""
+        return obj.liquidaciones.count()
+    
+    def get_ultima_liquidacion(self, obj):
+        """Retorna información sobre la última liquidación del proveedor"""
+        ultima = obj.liquidaciones.order_by('-fecha_liquidacion').first()
+        if not ultima:
+            return None
+            
+        return {
+            'uid': str(ultima.uid),
+            'fecha_liquidacion': ultima.fecha_liquidacion,
+            'monto_a_liquidar': float(ultima.monto_a_liquidar),
+            'estado': ultima.estado,
+            'estado_display': ultima.get_estado_display()
+        }
+
+class SupplierSerializerList(serializers.ModelSerializer):
+    """
+    Serializador simplificado para listar proveedores con información resumida.
+    Optimizado para rendimiento en listados con muchos proveedores.
+    """
+    total_deuda = serializers.SerializerMethodField()
+    total_pagado = serializers.SerializerMethodField()
+    recepciones_count = serializers.SerializerMethodField()
+    liquidaciones_count = serializers.SerializerMethodField()
+    ultima_actividad = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Supplier
+        fields = (
+            'uid', 'nombre', 'rut', 'telefono', 'email', 'contacto', 
+            'activo', 'total_deuda', 'total_pagado', 'recepciones_count',
+            'liquidaciones_count', 'ultima_actividad'
+        )
+    
+    def get_total_deuda(self, obj):
+        """Calcula la deuda total pendiente del proveedor"""
+        # Calcular el total de deuda sumando los montos totales de todas las recepciones
+        total = obj.recepciones.aggregate(total=Sum('monto_total'))['total'] or 0
+        
+        # Restar los pagos realizados
+        pagos = SupplierPayment.objects.filter(recepcion__proveedor=obj)
+        total_pagado = pagos.aggregate(total=Sum('monto'))['total'] or 0
+        
+        return total - total_pagado
+    
+    def get_total_pagado(self, obj):
+        """Suma todos los pagos realizados al proveedor"""
+        pagos = SupplierPayment.objects.filter(recepcion__proveedor=obj)
+        return pagos.aggregate(total=Sum('monto'))['total'] or 0
+    
+    def get_recepciones_count(self, obj):
+        """Retorna el número total de recepciones del proveedor"""
+        return obj.recepciones.count()
+    
+    def get_liquidaciones_count(self, obj):
+        """Retorna el número total de liquidaciones del proveedor"""
+        return obj.liquidaciones.count()
+    
+    def get_ultima_actividad(self, obj):
+        """Determina la fecha de última actividad (recepción o liquidación)"""
+        ultima_recepcion = obj.recepciones.aggregate(ultima=Max('fecha_recepcion'))['ultima']
+        ultima_liquidacion = obj.liquidaciones.aggregate(ultima=Max('fecha_liquidacion'))['ultima']
+        
+        # Determinar cuál es la más reciente
+        if ultima_recepcion and ultima_liquidacion:
+            return max(ultima_recepcion, ultima_liquidacion)
+        elif ultima_recepcion:
+            return ultima_recepcion
+        elif ultima_liquidacion:
+            return ultima_liquidacion
+        else:
+            return None
+
 
 class ProductSerializer(serializers.ModelSerializer):
     image_url = serializers.SerializerMethodField()
@@ -27,6 +344,94 @@ class ProductSerializer(serializers.ModelSerializer):
             return obj.image_path.url
         return None
 
+class FruitLotListSerializer(serializers.ModelSerializer):
+    producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
+    tipo_producto = serializers.CharField(source='producto.tipo_producto', read_only=True)
+    resumen_producto = serializers.SerializerMethodField()
+
+    # Campos para stock disponible
+    cajas_disponibles = serializers.SerializerMethodField()
+    kg_disponibles = serializers.SerializerMethodField()
+    unidades_disponibles = serializers.SerializerMethodField()
+    costo_total_pallet = serializers.SerializerMethodField()
+
+    class Meta:
+        model = FruitLot
+        fields = (
+            'uid', 'producto', 'producto_nombre', 'tipo_producto', 'calibre', 
+            'cajas_disponibles', 'kg_disponibles', 'unidades_disponibles',
+            'estado_maduracion', 'estado_lote', 'resumen_producto', 'fecha_ingreso', 
+            'procedencia', 'proveedor', 'costo_inicial', 'en_concesion', 'costo_total_pallet'
+        )
+
+    def _get_active_reservations_sum(self, obj):
+        if not hasattr(obj, '_active_reservations_sum_list'):
+            obj._active_reservations_sum_list = StockReservation.objects.filter(
+                lote=obj, estado='en_proceso'
+            ).aggregate(
+                total_cajas=Sum('cajas_reservadas'),
+                total_kg=Sum('kg_reservados'),
+                total_unidades=Sum('unidades_reservadas')
+            )
+        return obj._active_reservations_sum_list
+
+    def get_cajas_disponibles(self, obj):
+        sums = self._get_active_reservations_sum(obj)
+        cajas_reservadas = sums.get('total_cajas') or 0
+        return obj.cantidad_cajas - cajas_reservadas
+
+    def get_kg_disponibles(self, obj):
+        if obj.producto.tipo_producto != 'palta':
+            return obj.peso_neto
+        sums = self._get_active_reservations_sum(obj)
+        kg_reservados = sums.get('total_kg') or 0
+        return obj.peso_neto - kg_reservados
+
+    def get_unidades_disponibles(self, obj):
+        if obj.producto.tipo_producto == 'palta':
+            return obj.cantidad_unidades
+        sums = self._get_active_reservations_sum(obj)
+        unidades_reservadas = sums.get('total_unidades') or 0
+        return obj.cantidad_unidades - unidades_reservadas
+
+        return None
+    
+    def get_tipo_producto(self, obj):
+        if obj.producto:
+            return obj.producto.tipo_producto
+        return 'otro'
+    
+    def get_resumen_producto(self, obj):
+        if not obj.producto:
+            return "Producto no especificado"
+            
+        if obj.producto.tipo_producto == 'palta':
+            return f"{obj.producto.nombre} - {obj.calibre} - {obj.peso_neto}kg"
+        else:
+            return f"{obj.producto.nombre} - {obj.cantidad_cajas} cajas"
+    
+    def get_costo_total_pallet(self, obj):
+        if not obj.producto:
+            return 0
+        
+        # Acceder al tipo_producto a través de la relación con el producto.
+        if obj.producto.tipo_producto == 'palta':
+            costo_actual = obj.costo_actualizado()
+            peso_neto = obj.peso_neto or 0
+            return float(peso_neto) * float(costo_actual)
+        else:
+            cantidad_cajas = obj.cantidad_cajas or 0
+            costo_inicial = obj.costo_inicial or 0
+            return float(cantidad_cajas) * float(costo_inicial)
+
+    def get_disponibilidad(self, obj):
+        if not obj.producto:
+            return 0
+            
+        if obj.producto.tipo_producto == 'palta':
+            return obj.peso_disponible()
+        else:
+            return obj.unidades_disponibles()
 
 class FruitLotSerializer(serializers.ModelSerializer):
     producto_nombre = serializers.SerializerMethodField()
@@ -35,42 +440,131 @@ class FruitLotSerializer(serializers.ModelSerializer):
     costo_actual = serializers.SerializerMethodField()
     peso_reservado = serializers.SerializerMethodField()
     peso_disponible = serializers.SerializerMethodField()
-    tipo_producto = serializers.SerializerMethodField()
     dias_desde_ingreso = serializers.SerializerMethodField()
-    dias_en_bodega = serializers.SerializerMethodField()
-    porcentaje_perdida = serializers.SerializerMethodField()
-    perdida_estimada = serializers.SerializerMethodField()
-    valor_perdida = serializers.SerializerMethodField()
-    # Campo peso_vendible eliminado - usando peso_neto directamente
-    precio_recomendado_kg = serializers.SerializerMethodField()
-    costo_real_kg = serializers.SerializerMethodField()
-    ganancia_kg = serializers.SerializerMethodField()
-    margen = serializers.SerializerMethodField()
-    ingreso_estimado = serializers.SerializerMethodField()
-    ganancia_total = serializers.SerializerMethodField()
-    resumen_producto = serializers.SerializerMethodField()
-    urgencia_venta = serializers.SerializerMethodField()
-    recomendacion = serializers.SerializerMethodField()
-    costo_total_pallet = serializers.SerializerMethodField()
-    # Campos para información de ventas
-    peso_vendido = serializers.SerializerMethodField()
     dinero_generado = serializers.SerializerMethodField()
     porcentaje_vendido = serializers.SerializerMethodField()
+    propietario_original_nombre = serializers.SerializerMethodField()
+    proveedor_nombre = serializers.SerializerMethodField()
+    info_producto = serializers.SerializerMethodField()
+
+    # Campos para stock disponible
+    cajas_disponibles = serializers.SerializerMethodField()
+    kg_disponibles = serializers.SerializerMethodField()
+    unidades_disponibles = serializers.SerializerMethodField()
 
     class Meta:
         model = FruitLot
         fields = (
             'uid', 'producto', 'marca', 'proveedor', 'procedencia', 'pais', 'calibre', 'box_type', 'pallet_type',
-            'cantidad_cajas', 'peso_bruto', 'peso_neto', 'qr_code', 'business', 'fecha_ingreso',
-            'estado_maduracion', 'fecha_maduracion', 'porcentaje_perdida_estimado', 'costo_inicial',
-            'costo_diario_almacenaje', 'estado_lote', 'precio_sugerido_min', 'precio_sugerido_max',
-            'producto_nombre', 'box_type_nombre', 'pallet_type_nombre', 'costo_actual',
-            'peso_reservado', 'peso_disponible', 'tipo_producto', 'dias_desde_ingreso', 'dias_en_bodega',
-            'porcentaje_perdida', 'perdida_estimada', 'valor_perdida', 'precio_recomendado_kg',
-            'costo_real_kg', 'ganancia_kg', 'margen', 'ingreso_estimado', 'ganancia_total', 'resumen_producto',
-            'urgencia_venta', 'recomendacion', 'costo_total_pallet', 'peso_vendido', 'dinero_generado',
-            'porcentaje_vendido',
+            'cantidad_cajas', 'peso_neto', 'cantidad_unidades', 'costo_inicial', 'fecha_ingreso',
+            'estado_lote', 'estado_maduracion', 'en_concesion', 'comision_por_kilo', 'fecha_limite_concesion',
+            'propietario_original', 
+            # SerializerMethodFields
+            'producto_nombre', 'box_type_nombre', 'pallet_type_nombre', 'costo_actual', 'proveedor_nombre',
+            'dias_desde_ingreso', 'dinero_generado', 'porcentaje_vendido', 'propietario_original_nombre',
+            'info_producto', 'cajas_disponibles', 'kg_disponibles', 'peso_disponible', 'peso_reservado', 
+            'unidades_disponibles'
         )
+
+    def get_proveedor_nombre(self, obj):
+        return obj.proveedor
+
+    def get_dias_desde_ingreso(self, obj):
+        from django.utils import timezone
+        if obj.fecha_ingreso:
+            return (timezone.now().date() - obj.fecha_ingreso).days
+        return 0
+
+    def get_tipo_producto(self, obj):
+        if obj.producto:
+            return obj.producto.tipo_producto
+        return None
+
+    def get_info_producto(self, obj):
+        """
+        Proporciona información detallada y estructurada según el tipo de producto
+        """
+        tipo = self.get_tipo_producto(obj)
+        
+        # Información común para todos los tipos de producto
+        info = {
+            'tipo': tipo,
+            'nombre': self.get_producto_nombre(obj),
+            'estado_lote': obj.estado_lote,
+            'dias_desde_ingreso': self.get_dias_desde_ingreso(obj),
+            'costo_inicial': float(obj.costo_inicial) if obj.costo_inicial else 0,
+            'costo_actual': float(self.get_costo_actual(obj)),
+            'en_concesion': obj.en_concesion,
+        }
+        
+        # Información específica para paltas
+        if tipo == 'palta':
+            info.update({
+                'calibre': obj.calibre,
+                'estado_maduracion': obj.estado_maduracion,
+                'fecha_maduracion': obj.fecha_maduracion.isoformat() if obj.fecha_maduracion else None,
+                'peso': {
+                    'bruto': float(obj.peso_bruto) if obj.peso_bruto else 0,
+                    'neto': float(obj.peso_neto) if obj.peso_neto else 0,
+                    'disponible': float(self.get_kg_disponibles(obj)),
+                    'reservado': float(obj.peso_neto - self.get_kg_disponibles(obj)),
+                    'vendido': float(self.get_peso_vendido(obj)),
+                    'porcentaje_vendido': float(self.get_porcentaje_vendido(obj)),
+                },
+                'perdida': {
+                    'porcentaje': self.get_porcentaje_perdida(obj),
+                    'estimada_kg': self.get_perdida_estimada(obj),
+                    'valor': self.get_valor_perdida(obj),
+                },
+                'precios': {
+                    'costo_kg': self.get_costo_real_kg(obj),
+                    'recomendado_kg': self.get_precio_recomendado_kg(obj),
+                    'ganancia_kg': self.get_ganancia_kg(obj),
+                    'margen': self.get_margen(obj),
+                    'sugerido_min': float(obj.precio_sugerido_min) if obj.precio_sugerido_min else None,
+                    'sugerido_max': float(obj.precio_sugerido_max) if obj.precio_sugerido_max else None,
+                },
+                'proyecciones': {
+                    'ingreso_estimado': self.get_ingreso_estimado(obj),
+                    'ganancia_total': self.get_ganancia_total(obj),
+                },
+                'urgencia': self.get_urgencia_venta(obj),
+            })
+            
+            # Si está en concesión, agregar información específica
+            if obj.en_concesion:
+                info['concesion'] = {
+                    'propietario': self.get_propietario_original_nombre(obj),
+                    'comision_por_kilo': float(obj.comision_por_kilo) if obj.comision_por_kilo else 0,
+                    'fecha_limite': obj.fecha_limite_concesion.isoformat() if obj.fecha_limite_concesion else None,
+                }
+        
+        # Información específica para otros productos
+        else:
+            info.update({
+                'cantidad': {
+                    'cajas': obj.cantidad_cajas,
+                    'unidades_por_caja': getattr(obj, 'unidades_por_caja', 0),
+                    'unidades_totales': getattr(obj, 'cantidad_unidades', 0),
+                    'unidades_disponibles': getattr(obj, 'unidades_disponibles', lambda: 0)(),
+                    'unidades_reservadas': getattr(obj, 'unidades_reservadas', 0),
+                },
+                'precios': {
+                    'costo_por_caja': float(obj.costo_inicial) if obj.costo_inicial else 0,
+                    'costo_total': self.get_costo_total_pallet(obj),
+                    'sugerido_min': float(obj.precio_sugerido_min) if obj.precio_sugerido_min else None,
+                    'sugerido_max': float(obj.precio_sugerido_max) if obj.precio_sugerido_max else None,
+                }
+            })
+            
+            # Si está en concesión, agregar información específica
+            if obj.en_concesion:
+                info['concesion'] = {
+                    'propietario': self.get_propietario_original_nombre(obj),
+                    'fecha_limite': obj.fecha_limite_concesion.isoformat() if obj.fecha_limite_concesion else None,
+                }
+        
+        return info
 
     def get_producto_nombre(self, obj):
         if obj.producto:
@@ -92,8 +586,8 @@ class FruitLotSerializer(serializers.ModelSerializer):
 
     def get_peso_reservado(self, obj):
         from inventory.models import StockReservation
-        total = StockReservation.objects.filter(lote=obj).aggregate(total=Sum('cantidad_kg'))['total'] or 0
-        return float(total)
+        reservas = StockReservation.objects.filter(lote=obj, estado='en_proceso').aggregate(total_kg=Sum('kg_reservados'))
+        return reservas['total_kg'] or 0
 
     def get_peso_disponible(self, obj):
         neto = float(obj.peso_neto or 0)
@@ -101,14 +595,9 @@ class FruitLotSerializer(serializers.ModelSerializer):
         return neto - reservado if neto > reservado else 0
 
     def get_tipo_producto(self, obj):
-        nombre = (obj.producto.nombre if obj.producto else '').lower()
-        if 'palta' in nombre or 'aguacate' in nombre:
-            return 'palta'
-        if 'mango' in nombre:
-            return 'mango'
-        if 'platano' in nombre or 'plátano' in nombre or 'banano' in nombre:
-            return 'platano'
-        return 'otro'
+        if not obj.producto:
+            return 'otro'
+        return obj.producto.tipo_producto
 
     def get_dias_desde_ingreso(self, obj):
         from django.utils import timezone
@@ -218,29 +707,73 @@ class FruitLotSerializer(serializers.ModelSerializer):
         return None
 
     def get_costo_total_pallet(self, obj):
-        # Calcular el costo total multiplicando el costo actual por el peso neto
-        return round(float(obj.peso_neto or 0) * float(self.get_costo_actual(obj) or 0), 2)
+        # Calcular el costo total del pallet según su tipo
+        if not obj.producto:
+            return 0
+            
+        if obj.producto.tipo_producto == 'palta':
+            return round(float(obj.peso_neto or 0) * float(obj.costo_inicial or 0), 2)
+        else:  # tipo 'otro'
+            return round(float(obj.cantidad_cajas or 0) * float(obj.costo_inicial or 0), 2)
         
     def get_peso_vendido(self, obj):
         # Importar Sale aquí para evitar importaciones circulares
-        from sales.models import Sale
+        from sales.models import Sale, SaleItem
         # Sumar el peso vendido de todas las ventas asociadas a este lote
-        total_vendido = Sale.objects.filter(lote=obj).aggregate(total=Sum('peso_vendido'))['total'] or 0
+        total_vendido = SaleItem.objects.filter(lote=obj).aggregate(total=Sum('peso_vendido'))['total'] or 0
         return float(total_vendido)
     
     def get_dinero_generado(self, obj):
         # Importar Sale aquí para evitar importaciones circulares
-        from sales.models import Sale
-        # Sumar el total de dinero generado por ventas de este lote
-        total_dinero = Sale.objects.filter(lote=obj).aggregate(total=Sum('total'))['total'] or 0
+        from sales.models import SaleItem
+        # Usar el ID del lote en lugar de la relación directa
+        total_dinero = SaleItem.objects.filter(lote=obj).aggregate(total=Sum('subtotal'))['total'] or 0
         return float(total_dinero)
     
     def get_porcentaje_vendido(self, obj):
-        peso_neto = float(obj.peso_neto or 0)
-        if peso_neto > 0:
-            peso_vendido = self.get_peso_vendido(obj)
-            return round((peso_vendido / peso_neto) * 100, 2)
-        return 0
+        """Calcula el porcentaje del lote que ya ha sido vendido"""
+        if obj.peso_neto <= 0:
+            return 0
+        
+        peso_vendido = self.get_peso_vendido(obj)
+        from decimal import Decimal
+        return round((Decimal(str(peso_vendido)) / obj.peso_neto) * 100, 2)
+        
+    def get_propietario_original_nombre(self, obj):
+        """Obtiene el nombre del propietario original para lotes en concesión"""
+        if obj.en_concesion and obj.propietario_original:
+            return obj.propietario_original.nombre
+        return None
+
+    def _get_active_reservations_sum(self, obj):
+        if not hasattr(obj, '_active_reservations_sum'):
+            obj._active_reservations_sum = StockReservation.objects.filter(
+                lote=obj, estado='en_proceso'
+            ).aggregate(
+                total_cajas=Sum('cajas_reservadas'),
+                total_kg=Sum('kg_reservados'),
+                total_unidades=Sum('unidades_reservadas')
+            )
+        return obj._active_reservations_sum
+
+    def get_cajas_disponibles(self, obj):
+        sums = self._get_active_reservations_sum(obj)
+        cajas_reservadas = sums.get('total_cajas') or 0
+        return obj.cantidad_cajas - cajas_reservadas
+
+    def get_kg_disponibles(self, obj):
+        if obj.producto.tipo_producto != 'palta':
+            return obj.peso_neto
+        sums = self._get_active_reservations_sum(obj)
+        kg_reservados = sums.get('total_kg') or 0
+        return obj.peso_neto - kg_reservados
+
+    def get_unidades_disponibles(self, obj):
+        if obj.producto.tipo_producto == 'palta':
+            return obj.cantidad_unidades
+        sums = self._get_active_reservations_sum(obj)
+        unidades_reservadas = sums.get('total_unidades') or 0
+        return obj.cantidad_unidades - unidades_reservadas
 
 class StockReservationSerializer(serializers.ModelSerializer):
     lote_producto = serializers.SerializerMethodField()
@@ -293,7 +826,7 @@ class ReceptionDetailSerializer(serializers.ModelSerializer):
         fields = (
             'uid', 'recepcion', 'producto', 'producto_nombre', 'variedad', 'calibre', 'box_type', 'numero_pallet', 'cantidad_cajas', 'peso_bruto',
             'peso_tara', 'calidad', 'temperatura', 'estado_maduracion', 'observaciones', 'lote_creado',
-            'costo', 'porcentaje_perdida_estimado',
+            'costo', 'porcentaje_perdida_estimado', 'precio_sugerido_min', 'precio_sugerido_max'
         )
 
 class SupplierRelatedField(serializers.PrimaryKeyRelatedField):
@@ -306,11 +839,33 @@ class SupplierRelatedField(serializers.PrimaryKeyRelatedField):
         except (ValueError, Supplier.DoesNotExist):
             return super().to_internal_value(data)
 
+class GoodsReceptionListSerializer(serializers.ModelSerializer):
+    """Serializer simplificado para listas de recepciones, optimizado para eficiencia"""
+    proveedor_nombre = serializers.SerializerMethodField()
+    recibido_por_nombre = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = GoodsReception
+        fields = (
+            'uid', 'numero_guia', 'fecha_recepcion', 'proveedor_nombre', 'numero_guia_proveedor',
+            'recibido_por_nombre', 'total_pallets', 'total_cajas', 'estado'
+        )
+    
+    def get_proveedor_nombre(self, obj):
+        return obj.proveedor.nombre if obj.proveedor else None
+        
+    def get_recibido_por_nombre(self, obj):
+        if obj.recibido_por:
+            return f"{obj.recibido_por.first_name} {obj.recibido_por.last_name}".strip()
+        return None
+
 class GoodsReceptionSerializer(serializers.ModelSerializer):
     proveedor = SupplierRelatedField(queryset=Supplier.objects.all())
     detalles = ReceptionDetailSerializer(many=True, required=False)
     recibido_por_nombre = serializers.SerializerMethodField()
     revisado_por_nombre = serializers.SerializerMethodField()
+    # Añadir el objeto completo del proveedor
+    proveedor_info = SupplierSerializer(source='proveedor', read_only=True)
 
     def to_internal_value(self, data):
         import json
@@ -320,15 +875,32 @@ class GoodsReceptionSerializer(serializers.ModelSerializer):
                 data['detalles'] = json.loads(detalles)
             except Exception:
                 raise serializers.ValidationError({'detalles': 'Debe ser un JSON válido.'})
+    
+        # Convertir strings vacíos a None en campos de fecha
+        fecha_limite = data.get('fecha_limite_concesion')
+        if fecha_limite == '':
+            data['fecha_limite_concesion'] = None
+            
+        fecha_recepcion = data.get('fecha_recepcion')
+        if fecha_recepcion == '':
+            data['fecha_recepcion'] = None
+            
         return super().to_internal_value(data)
 
     class Meta:
         model = GoodsReception
         fields = (
-            'uid', 'numero_guia', 'fecha_recepcion', 'proveedor', 'numero_guia_proveedor', 'recibido_por',
+            'uid', 'numero_guia', 'fecha_recepcion', 'proveedor', 'proveedor_info', 'numero_guia_proveedor', 'recibido_por',
             'revisado_por', 'recibido_por_nombre', 'revisado_por_nombre', 'estado', 'observaciones', 
             'total_pallets', 'total_cajas', 'total_peso_bruto', 'business', 'detalles',
+            'en_concesion', 'comision_por_kilo', 'fecha_limite_concesion',
         )
+        # Excluir IDs que no se utilizan de la respuesta (solo para escritura)
+        extra_kwargs = {
+            'proveedor': {'write_only': True},
+            'recibido_por': {'write_only': True},
+            'business': {'write_only': True}
+        }
         
     def get_recibido_por_nombre(self, obj):
         if obj.recibido_por:
@@ -342,88 +914,46 @@ class GoodsReceptionSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         detalles_data = validated_data.pop('detalles', [])
+        
+        # Extraer campos de concesión de la recepción
+        en_concesion = validated_data.get('en_concesion', False)
+        comision_por_kilo = validated_data.get('comision_por_kilo', 0)
+        fecha_limite_concesion = validated_data.get('fecha_limite_concesion', None)
+        
         recepcion = GoodsReception.objects.create(**validated_data)
+        
         for detalle_data in detalles_data:
+            # Agregar campos de concesión a cada detalle
+            detalle_data['en_concesion'] = en_concesion
+            detalle_data['comision_por_kilo'] = comision_por_kilo
+            detalle_data['fecha_limite_concesion'] = fecha_limite_concesion
+            
             ReceptionDetail.objects.create(recepcion=recepcion, **detalle_data)
         return recepcion
 
     def update(self, instance, validated_data):
         detalles_data = validated_data.pop('detalles', None)
+        
+        # Extraer campos de concesión de la recepción
+        en_concesion = validated_data.get('en_concesion', instance.en_concesion)
+        comision_por_kilo = validated_data.get('comision_por_kilo', instance.comision_por_kilo)
+        fecha_limite_concesion = validated_data.get('fecha_limite_concesion', instance.fecha_limite_concesion)
+        
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
+        
         if detalles_data is not None:
             # Elimina los detalles anteriores y crea los nuevos
             instance.detalles.all().delete()
             for detalle_data in detalles_data:
+                # Agregar campos de concesión a cada detalle
+                detalle_data['en_concesion'] = en_concesion
+                detalle_data['comision_por_kilo'] = comision_por_kilo
+                detalle_data['fecha_limite_concesion'] = fecha_limite_concesion
+                
                 ReceptionDetail.objects.create(recepcion=instance, **detalle_data)
         return instance
-
-class SupplierSerializer(serializers.ModelSerializer):
-    total_deuda = serializers.SerializerMethodField()
-    total_pagado = serializers.SerializerMethodField()
-    recepciones_pendientes = serializers.SerializerMethodField()
-    
-    class Meta:
-        model = Supplier
-        fields = ('uid', 'nombre', 'rut', 'direccion', 'telefono', 'email', 'contacto', 'observaciones', 
-                 'business', 'activo', 'total_deuda', 'total_pagado', 'recepciones_pendientes')
-    
-    def get_total_deuda(self, obj):
-        # Calcular el total de deuda sumando los montos totales de todas las recepciones
-        total = obj.recepciones.aggregate(total=Sum('monto_total'))['total'] or 0
-        
-        # Restar los pagos realizados
-        pagos = SupplierPayment.objects.filter(recepcion__proveedor=obj)
-        total_pagado = pagos.aggregate(total=Sum('monto'))['total'] or 0
-        
-        return total - total_pagado
-    
-    def get_total_pagado(self, obj):
-        # Sumar todos los pagos realizados al proveedor
-        pagos = SupplierPayment.objects.filter(recepcion__proveedor=obj)
-        return pagos.aggregate(total=Sum('monto'))['total'] or 0
-    
-    def get_recepciones_pendientes(self, obj):
-        # Obtener todas las recepciones del proveedor
-        recepciones = obj.recepciones.all()
-        
-        # Preparar datos de recepciones con información de pagos
-        resultado = []
-        
-        for recepcion in recepciones:
-            # Calcular total pagado para esta recepción
-            pagos = SupplierPayment.objects.filter(recepcion=recepcion)
-            total_pagado = pagos.aggregate(total=Sum('monto'))['total'] or 0
-            
-            # Determinar estado de pago
-            if total_pagado >= recepcion.monto_total:
-                estado_pago = 'pagado'
-            elif total_pagado > 0:
-                estado_pago = 'parcial'
-            else:
-                estado_pago = 'pendiente'
-            
-            # Añadir datos de la recepción
-            resultado.append({
-                'uid': str(recepcion.uid),
-                'numero_guia': recepcion.numero_guia,
-                'fecha_recepcion': recepcion.fecha_recepcion,
-                'monto_total': float(recepcion.monto_total),
-                'monto_pagado': float(total_pagado),
-                'estado_pago': estado_pago,
-                'pagos': [{
-                    'uid': str(pago.uid),
-                    'monto': float(pago.monto),
-                    'fecha_pago': pago.fecha_pago,
-                    'metodo_pago': pago.metodo_pago,
-                    'metodo_pago_display': pago.get_metodo_pago_display(),
-                    'notas': pago.notas
-                } for pago in pagos]
-            })
-        
-        return resultado
-
 
 class SupplierPaymentSerializer(serializers.ModelSerializer):
     metodo_pago_display = serializers.CharField(source='get_metodo_pago_display', read_only=True)
@@ -443,3 +973,337 @@ class SupplierPaymentSerializer(serializers.ModelSerializer):
     
     def get_proveedor_nombre(self, obj):
         return obj.recepcion.proveedor.nombre if obj.recepcion and obj.recepcion.proveedor else None
+
+class ConcessionSettlementDetailSerializer(serializers.ModelSerializer):
+    lote_nombre = serializers.SerializerMethodField()
+    venta_codigo = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = ConcessionSettlementDetail
+        fields = [
+            'id', 'liquidacion', 'venta', 'venta_codigo', 'item_venta', 'lote', 'lote_nombre',
+            'cantidad_kilos', 'precio_venta', 'comision', 'monto_liquidado'
+        ]
+    
+    def get_lote_nombre(self, obj):
+        if obj.lote and obj.lote.producto:
+            return f"{obj.lote.producto.nombre} - {obj.lote.calibre}"
+        return f"Lote {obj.lote.id}" if obj.lote else None
+    
+    def get_venta_codigo(self, obj):
+        return obj.venta.codigo_venta if obj.venta else None
+
+class ConcessionSettlementSerializer(serializers.ModelSerializer):
+    proveedor_nombre = serializers.SerializerMethodField()
+    proveedor_rut = serializers.SerializerMethodField()
+    estado_display = serializers.CharField(source='get_estado_display', read_only=True)
+    detalles = ConcessionSettlementDetailSerializer(many=True, read_only=True)
+    
+    class Meta:
+        model = ConcessionSettlement
+        fields = [
+            'uid', 'proveedor', 'proveedor_nombre', 'proveedor_rut', 'fecha_liquidacion',
+            'total_kilos_vendidos', 'total_ventas', 'total_comision', 'monto_a_liquidar',
+            'estado', 'estado_display', 'comprobante', 'notas', 'detalles',
+            'created_at', 'updated_at'
+        ]
+    
+    def get_proveedor_nombre(self, obj):
+        return obj.proveedor.nombre if obj.proveedor else None
+    
+    def get_proveedor_rut(self, obj):
+        return obj.proveedor.rut if obj.proveedor else None
+
+class PalletHistorySerializerList(serializers.ModelSerializer):
+    """Serializador para listar el historial de pallets vendidos o agotados"""
+    nombre_producto = serializers.SerializerMethodField()
+    calibre = serializers.CharField(read_only=True)
+    proveedor = serializers.CharField(read_only=True)
+    procedencia = serializers.CharField(read_only=True)
+    fecha_ingreso = serializers.DateField(read_only=True)
+    fecha_ultima_venta = serializers.SerializerMethodField()
+    total_generado = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = FruitLot
+        fields = (
+            'uid', 'nombre_producto', 'calibre', 'proveedor', 'procedencia',
+            'fecha_ingreso', 'fecha_ultima_venta', 'total_generado'
+        )
+    
+    def get_nombre_producto(self, obj):
+        return obj.producto.nombre if obj.producto else 'Desconocido'
+    
+    def get_fecha_ultima_venta(self, obj):
+        # Obtener la fecha de la última venta relacionada con este lote
+        ultima_venta = SaleItem.objects.filter(
+            lote=obj
+        ).aggregate(ultima_fecha=Max('created_at'))
+        
+        return ultima_venta.get('ultima_fecha')
+    
+    def get_total_generado(self, obj):
+        # Calcular el total generado por las ventas de este lote
+        ventas = SaleItem.objects.filter(lote=obj)
+        
+        # Sumar todos los subtotales de los items de venta
+        total = ventas.aggregate(total=Sum('subtotal'))['total'] or 0
+        
+        return total
+
+class PalletHistoryDetailSerializer(serializers.ModelSerializer):
+    """Serializador para el detalle de un pallet vendido o agotado, específico por tipo de fruta"""
+    nombre_producto = serializers.SerializerMethodField()
+    tipo_producto = serializers.SerializerMethodField()
+    calibre = serializers.CharField(read_only=True)
+    proveedor = serializers.CharField(read_only=True)
+    procedencia = serializers.CharField(read_only=True)
+    pais = serializers.CharField(read_only=True)
+    fecha_ingreso = serializers.DateField(read_only=True)
+    fecha_ultima_venta = serializers.SerializerMethodField()
+    total_generado = serializers.SerializerMethodField()
+    costo_total_pallet = serializers.SerializerMethodField()
+    ganancia_pallet = serializers.SerializerMethodField()
+    margen_ganancia = serializers.SerializerMethodField()
+    resumen_ventas = serializers.SerializerMethodField()
+    ventas_detalle = serializers.SerializerMethodField()
+    # Campos específicos por tipo de producto
+    datos_especificos = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = FruitLot
+        fields = (
+            'uid', 'nombre_producto', 'tipo_producto', 'calibre', 'proveedor', 
+            'procedencia', 'pais', 'fecha_ingreso', 'fecha_ultima_venta', 
+            'total_generado', 'costo_total_pallet', 'ganancia_pallet', 'margen_ganancia',
+            'resumen_ventas', 'ventas_detalle', 'datos_especificos'
+        )
+    
+    def get_nombre_producto(self, obj):
+        return obj.producto.nombre if obj.producto else 'Desconocido'
+    
+    def get_tipo_producto(self, obj):
+        return obj.producto.tipo_producto if obj.producto else 'desconocido'
+    
+    def get_fecha_ultima_venta(self, obj):
+        # Obtener la fecha de la última venta relacionada con este lote
+        ultima_venta = SaleItem.objects.filter(
+            lote=obj
+        ).aggregate(ultima_fecha=Max('created_at'))
+        
+        return ultima_venta.get('ultima_fecha')
+    
+    def get_total_generado(self, obj):
+        # Calcular el total generado por las ventas de este lote
+        ventas = SaleItem.objects.filter(lote=obj)
+        
+        # Sumar todos los subtotales de los items de venta
+        total = ventas.aggregate(total=Sum('subtotal'))['total'] or 0
+        
+        # Convertir a float para evitar problemas de tipo
+        return float(total)
+    
+    def get_ventas_detalle(self, obj):
+        # Obtener todas las ventas relacionadas con este lote
+        ventas = SaleItem.objects.filter(lote=obj).select_related('venta')
+        
+        # Crear un resumen de cada venta
+        resultado = []
+        for venta in ventas:
+            item = {
+                'fecha_venta': venta.created_at,
+                'codigo_venta': venta.venta.codigo_venta if hasattr(venta, 'venta') and venta.venta else 'N/A',
+                'subtotal': float(venta.subtotal) if venta.subtotal else 0,
+                'cliente': venta.venta.cliente.nombre if hasattr(venta, 'venta') and venta.venta and venta.venta.cliente else 'Cliente no registrado',
+            }
+            
+            # Añadir campos específicos según el tipo de producto
+            if obj.producto and obj.producto.tipo_producto == 'palta':
+                item['peso_vendido'] = float(venta.peso_vendido) if venta.peso_vendido else 0
+                item['precio_kg'] = float(venta.precio_kg) if venta.precio_kg else 0
+                
+                # Calcular costo_kg con conversión segura a float
+                costo_kg = 0
+                if hasattr(venta, 'costo_kg') and venta.costo_kg:
+                    costo_kg = float(venta.costo_kg)
+                elif obj.costo_inicial:
+                    costo_kg = float(obj.costo_inicial)
+                item['costo_kg'] = costo_kg
+                
+                # Calcular ganancia con valores ya convertidos
+                precio_kg = item['precio_kg']
+                item['ganancia_kg'] = precio_kg - costo_kg
+                item['ganancia_item'] = item['ganancia_kg'] * item['peso_vendido']
+            else:  # tipo 'otro'
+                item['unidades_vendidas'] = int(venta.unidades_vendidas) if venta.unidades_vendidas else 0
+                item['precio_unidad'] = float(venta.precio_unidad) if venta.precio_unidad else 0
+                
+                # Calcular costo_unidad con conversión segura a float
+                costo_unidad = 0
+                if hasattr(venta, 'costo_unidad') and venta.costo_unidad:
+                    costo_unidad = float(venta.costo_unidad)
+                elif obj.costo_inicial:
+                    costo_unidad = float(obj.costo_inicial)
+                item['costo_unidad'] = costo_unidad
+                
+                # Calcular ganancia con valores ya convertidos
+                precio_unidad = item['precio_unidad']
+                item['ganancia_unidad'] = precio_unidad - costo_unidad
+                item['ganancia_item'] = item['ganancia_unidad'] * item['unidades_vendidas']
+                
+            resultado.append(item)
+            
+        return resultado
+    
+    def get_datos_especificos(self, obj):
+        """Devuelve datos específicos según el tipo de producto"""
+        if not obj.producto:
+            return {}
+            
+        if obj.producto.tipo_producto == 'palta':
+            # Datos específicos para paltas
+            return {
+                'peso_bruto': float(obj.peso_bruto) if obj.peso_bruto else 0,
+                'peso_neto': float(obj.peso_neto) if obj.peso_neto else 0,
+                'cantidad_cajas': obj.cantidad_cajas,
+                'box_type': obj.box_type.nombre if obj.box_type else 'N/A',
+                'pallet_type': obj.pallet_type.nombre if obj.pallet_type else 'N/A',
+                'estado_maduracion': obj.estado_maduracion,
+                'costo_inicial': float(obj.costo_inicial) if obj.costo_inicial else 0,
+                'costo_kg': float(obj.costo_inicial) if obj.costo_inicial else 0,
+                'precio_sugerido_min': float(obj.precio_sugerido_min) if obj.precio_sugerido_min else 0,
+                'precio_sugerido_max': float(obj.precio_sugerido_max) if obj.precio_sugerido_max else 0,
+                'peso_vendido_total': self.get_peso_vendido(obj),
+            }
+        else:  # tipo 'otro'
+            # Datos específicos para otros productos
+            return {
+                'cantidad_unidades': obj.cantidad_unidades,
+                'unidades_por_caja': obj.unidades_por_caja,
+                'cantidad_cajas': obj.cantidad_cajas,
+                'box_type': obj.box_type.nombre if obj.box_type else 'N/A',
+                'costo_inicial': float(obj.costo_inicial) if obj.costo_inicial else 0,
+                'costo_unidad': float(obj.costo_inicial) / obj.unidades_por_caja if obj.costo_inicial and obj.unidades_por_caja else 0,
+                'precio_sugerido_min': float(obj.precio_sugerido_min) if obj.precio_sugerido_min else 0,
+                'precio_sugerido_max': float(obj.precio_sugerido_max) if obj.precio_sugerido_max else 0,
+                'unidades_vendidas_total': self.get_unidades_vendidas(obj),
+            }
+            
+    def get_ganancia_pallet(self, obj):
+        """Calcula la ganancia total del pallet (total generado - costo total)"""
+        # Convertir todos los valores a float para evitar problemas de tipo
+        total_generado = float(self.get_total_generado(obj))
+        costo_total = float(self.get_costo_total_pallet(obj))
+        return total_generado - costo_total
+    
+    def get_margen_ganancia(self, obj):
+        """Calcula el margen de ganancia como porcentaje"""
+        costo_total = self.get_costo_total_pallet(obj)
+        ganancia = self.get_ganancia_pallet(obj)
+        
+        if costo_total > 0:
+            return round((ganancia / costo_total) * 100, 2)
+        elif ganancia > 0:
+            # Si hay ganancia pero no hay costo registrado, el margen es técnicamente infinito
+            # pero reportamos 100% como valor máximo
+            return 100.0
+        return 0.0
+    
+    def get_peso_vendido(self, obj):
+        """Calcula el peso total vendido para paltas"""
+        if not obj.producto or obj.producto.tipo_producto != 'palta':
+            return 0
+            
+        ventas = SaleItem.objects.filter(lote=obj)
+        return float(ventas.aggregate(total=Sum('peso_vendido'))['total'] or 0)
+    
+    def get_unidades_vendidas(self, obj):
+        """Calcula las unidades totales vendidas para otros productos"""
+        if not obj.producto or obj.producto.tipo_producto == 'palta':
+            return 0
+            
+        ventas = SaleItem.objects.filter(lote=obj)
+        return ventas.aggregate(total=Sum('unidades_vendidas'))['total'] or 0
+        
+    def get_costo_total_pallet(self, obj):
+        """Calcula el costo total del pallet según su tipo"""
+        if not obj.producto:
+            return 0.0
+            
+        try:
+            if obj.producto.tipo_producto == 'palta':
+                # Para paltas, el costo es por peso bruto original
+                # Usamos el peso bruto ya que es el dato original del pallet
+                peso_bruto = float(obj.peso_bruto or 0)
+                costo_inicial = float(obj.costo_inicial or 0)
+                
+                # Si tenemos datos específicos en datos_especificos, los usamos
+                datos_especificos = self.get_datos_especificos(obj)
+                if datos_especificos and 'peso_bruto' in datos_especificos and datos_especificos['peso_bruto'] > 0:
+                    peso_bruto = datos_especificos['peso_bruto']
+                
+                return round(peso_bruto * costo_inicial, 2)
+            else:  # tipo 'otro'
+                # Para otros productos, el costo es por cantidad de cajas
+                cantidad_cajas = float(obj.cantidad_cajas or 0)
+                costo_inicial = float(obj.costo_inicial or 0)
+                return round(cantidad_cajas * costo_inicial, 2)
+        except (TypeError, ValueError):
+            # En caso de error de conversión, devolver 0
+            return 0.0
+    
+    def get_resumen_ventas(self, obj):
+        """Proporciona un resumen de las ventas del pallet"""
+        ventas = SaleItem.objects.filter(lote=obj)
+        num_ventas = ventas.count()
+        
+        if not obj.producto:
+            return {
+                'num_ventas': num_ventas,
+                'total_generado': float(self.get_total_generado(obj))
+            }
+        
+        total_generado = float(self.get_total_generado(obj))
+        costo_total = float(self.get_costo_total_pallet(obj))
+        ganancia_total = total_generado - costo_total
+        
+        # Calcular margen de ganancia
+        margen_ganancia = 0
+        if costo_total > 0:
+            margen_ganancia = round((ganancia_total / costo_total) * 100, 2)
+        elif ganancia_total > 0:
+            # Si hay ganancia pero no hay costo registrado, reportamos 100%
+            margen_ganancia = 100.0
+        
+        if obj.producto.tipo_producto == 'palta':
+            # Para paltas
+            peso_total_vendido = self.get_peso_vendido(obj)
+            precio_promedio_kg = 0
+            if peso_total_vendido > 0:
+                precio_promedio_kg = round(total_generado / peso_total_vendido, 2)
+                
+            return {
+                'num_ventas': num_ventas,
+                'peso_total_vendido': peso_total_vendido,
+                'precio_promedio_kg': precio_promedio_kg,
+                'total_generado': total_generado,
+                'costo_total': costo_total,
+                'ganancia_total': ganancia_total,
+                'margen_ganancia': margen_ganancia
+            }
+        else:  # tipo 'otro'
+            # Para otros productos
+            unidades_total_vendidas = self.get_unidades_vendidas(obj)
+            precio_promedio_unidad = 0
+            if unidades_total_vendidas > 0:
+                precio_promedio_unidad = round(total_generado / unidades_total_vendidas, 2)
+                
+            return {
+                'num_ventas': num_ventas,
+                'unidades_total_vendidas': unidades_total_vendidas,
+                'precio_promedio_unidad': precio_promedio_unidad,
+                'total_generado': total_generado,
+                'costo_total': costo_total,
+                'ganancia_total': ganancia_total,
+                'margen_ganancia': margen_ganancia
+            }

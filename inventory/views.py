@@ -1,13 +1,18 @@
 from rest_framework import viewsets, status
-from .models import BoxType, FruitLot, StockReservation, Product, GoodsReception, Supplier, ReceptionDetail, SupplierPayment
-from .serializers import BoxTypeSerializer, FruitLotSerializer, StockReservationSerializer, ProductSerializer, GoodsReceptionSerializer, SupplierSerializer, ReceptionDetailSerializer, SupplierPaymentSerializer
+from django.db.models import Q
+from .models import BoxType, FruitLot, StockReservation, Product, GoodsReception, Supplier, ReceptionDetail, SupplierPayment, ConcessionSettlement, ConcessionSettlementDetail
+from .serializers import BoxTypeSerializer, FruitLotSerializer, FruitLotListSerializer, StockReservationSerializer, ProductSerializer, GoodsReceptionSerializer, GoodsReceptionListSerializer, ReceptionDetailSerializer, SupplierPaymentSerializer, ConcessionSettlementSerializer, ConcessionSettlementDetailSerializer, PalletHistorySerializerList, PalletHistoryDetailSerializer
+from .serializers_supplier import SupplierSerializerList, SupplierSerializer
 from rest_framework.permissions import IsAuthenticated
 from core.permissions import IsSameBusiness
 from accounts.models import CustomUser
+from sales.models import SalePendingItem
 from rest_framework.response import Response
 from asgiref.sync import async_to_sync
 from rest_framework.exceptions import ValidationError
 from rest_framework.decorators import action
+from django.db.models import Subquery, OuterRef, Sum, F, IntegerField
+from django.db.models.functions import Coalesce
 import json
 
 class RolePermissionMixin:
@@ -60,23 +65,67 @@ class FruitLotViewSet(RolePermissionMixin, viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsSameBusiness]
     queryset = FruitLot.objects.all()
     lookup_field = 'uid'
+    
+    def get_serializer_class(self):
+        """Usa un serializer diferente para la lista y el detalle."""
+        if self.action == 'list':
+            return FruitLotListSerializer
+        elif self.action == 'sold_pallets':
+            return PalletHistorySerializerList
+        elif self.action == 'sold_pallet_detail':
+            return PalletHistoryDetailSerializer
+        return FruitLotSerializer
 
     def get_queryset(self):
         qs = super().get_queryset()
+
+        # Subquery para calcular el total de cajas reservadas para cada lote
+        reservas_cajas_subquery = StockReservation.objects.filter(
+            lote=OuterRef('pk'), 
+            estado='en_proceso'
+        ).values('lote').annotate(
+            total_reservado=Sum('cajas_reservadas')
+        ).values('total_reservado')
+
+        # Subquery para calcular el total de unidades reservadas para productos no-palta
+        reservas_unidades_subquery = StockReservation.objects.filter(
+            lote=OuterRef('pk'), 
+            estado='en_proceso'
+        ).values('lote').annotate(
+            total_unidades=Sum('unidades_reservadas')
+        ).values('total_unidades')
+
+        # Anotar el queryset con el stock disponible
+        qs = qs.annotate(
+            cajas_reservadas=Coalesce(
+                Subquery(reservas_cajas_subquery, output_field=IntegerField()), 
+                0
+            ),
+            total_unidades_reservadas=Coalesce(
+                Subquery(reservas_unidades_subquery, output_field=IntegerField()),
+                0
+            )
+        ).annotate(
+            stock_disponible_cajas=F('cantidad_cajas') - F('cajas_reservadas')
+        )
+
         # Verificar si hay un filtro específico por estado_lote
         estado_lote = self.request.query_params.get('estado_lote', None)
+        tipo_producto = self.request.query_params.get('tipo_producto', None)
         
-        # Si se solicita específicamente un estado, aplicar ese filtro
+        # Filtrar por estado y stock disponible directamente en el queryset
         if estado_lote is not None:
             qs = qs.filter(estado_lote=estado_lote)
         else:
-            # Si no hay filtro específico, ocultar los lotes agotados por defecto
-            qs = qs.exclude(estado_lote='agotado')
+            # Mostrar todos los lotes que tengan cajas disponibles, independientemente del tipo de producto
+            # Esto asegura que se muestren tanto paltas como otros productos
+            qs = qs.filter(cantidad_cajas__gt=0)
         
-        # Excluir lotes que tienen ventas pendientes asociadas
-        from sales.models import SalePending
-        lotes_con_ventas_pendientes = SalePending.objects.filter(estado='pendiente').values_list('lote', flat=True)
-        return qs.exclude(id__in=lotes_con_ventas_pendientes)
+        # Filtrar por tipo de producto si se especifica
+        if tipo_producto is not None:
+            qs = qs.filter(producto__tipo_producto=tipo_producto)
+            
+        return qs.order_by('-created_at')
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -114,39 +163,99 @@ class FruitLotViewSet(RolePermissionMixin, viewsets.ModelViewSet):
             'errors': serializer.errors
         }, status=status.HTTP_400_BAD_REQUEST)
     
-    @action(detail=True, methods=['post'], url_path='update-maturation')
+    @action(detail=True, methods=['post'])
     def update_maturation(self, request, uid=None):
         """Actualiza el estado de maduración de un lote de fruta"""
-        from .serializers_update import FruitLotMaturationUpdateSerializer
-        from .models import MadurationHistory
-        
-        lote = self.get_object()
-        estado_anterior = lote.estado_maduracion
-        serializer = FruitLotMaturationUpdateSerializer(lote, data=request.data, partial=True)
-        
-        if serializer.is_valid():
-            # Guardar el lote actualizado
-            lote_actualizado = serializer.save()
+        try:
+            lote = self.get_object()
+            nuevo_estado = request.data.get('estado_maduracion')
+            if not nuevo_estado:
+                return Response({'error': 'Se requiere el campo estado_maduracion'}, status=status.HTTP_400_BAD_REQUEST)
+                
+            # Validar que el estado sea uno de los permitidos
+            estados_validos = ['verde', 'pre-maduro', 'maduro', 'sobremaduro']
+            if nuevo_estado not in estados_validos:
+                return Response({'error': f'Estado inválido. Debe ser uno de: {estados_validos}'}, status=status.HTTP_400_BAD_REQUEST)
             
-            # Verificar si el estado de maduración cambió
-            if 'estado_maduracion' in request.data and lote_actualizado.estado_maduracion != estado_anterior:
-                # Registrar el cambio en el historial de maduración
-                MadurationHistory.objects.create(
-                    lote=lote_actualizado,
-                    estado_maduracion=lote_actualizado.estado_maduracion
+            # Actualizar el estado
+            lote.estado_maduracion = nuevo_estado
+            lote.fecha_maduracion = timezone.now().date()
+            lote.save()
+            
+            # Registrar el cambio en el historial
+            from .models import MadurationHistory
+            MadurationHistory.objects.create(
+                lote=lote,
+                estado_maduracion=nuevo_estado
+            )
+            
+            return Response({'status': 'success', 'message': f'Estado de maduración actualizado a {nuevo_estado}'}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            
+    @action(detail=False, methods=['get'])
+    def sold_pallets(self, request):
+        """Retorna una lista de pallets vendidos o con estado agotado"""
+        try:
+            # Filtrar pallets vendidos o agotados
+            queryset = FruitLot.objects.filter(estado_lote='agotado')
+            
+            # Aplicar filtros adicionales si se proporcionan
+            producto_id = request.query_params.get('producto_id')
+            if producto_id:
+                queryset = queryset.filter(producto__uid=producto_id)
+                
+            proveedor = request.query_params.get('proveedor')
+            if proveedor:
+                queryset = queryset.filter(proveedor__icontains=proveedor)
+                
+            procedencia = request.query_params.get('procedencia')
+            if procedencia:
+                queryset = queryset.filter(procedencia__icontains=procedencia)
+                
+            fecha_desde = request.query_params.get('fecha_desde')
+            if fecha_desde:
+                queryset = queryset.filter(fecha_ingreso__gte=fecha_desde)
+                
+            fecha_hasta = request.query_params.get('fecha_hasta')
+            if fecha_hasta:
+                queryset = queryset.filter(fecha_ingreso__lte=fecha_hasta)
+            
+            # Ordenar por fecha de ingreso descendente (más reciente primero)
+            queryset = queryset.order_by('-fecha_ingreso')
+            
+            # Paginar resultados
+            page = self.paginate_queryset(queryset)
+            if page is not None:
+                serializer = self.get_serializer(page, many=True)
+                return self.get_paginated_response(serializer.data)
+            
+            serializer = self.get_serializer(queryset, many=True)
+            return Response(serializer.data)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            
+    @action(detail=True, methods=['get'])
+    def sold_pallet_detail(self, request, uid=None):
+        """Retorna el detalle de un pallet vendido o agotado, con información específica según el tipo de fruta"""
+        try:
+            # Obtener el lote directamente por su UID
+            try:
+                lote = FruitLot.objects.get(uid=uid)
+            except FruitLot.DoesNotExist:
+                return Response({'error': f'No existe un pallet con el ID: {uid}'}, status=status.HTTP_404_NOT_FOUND)
+            
+            # Verificar que el lote esté agotado
+            if lote.estado_lote != 'agotado':
+                return Response(
+                    {'error': 'Este pallet no está agotado o vendido'}, 
+                    status=status.HTTP_400_BAD_REQUEST
                 )
             
-            return Response({
-                'status': 'success',
-                'message': 'Estado de maduración actualizado correctamente',
-                'data': serializer.data
-            }, status=status.HTTP_200_OK)
-        
-        return Response({
-            'status': 'error',
-            'message': 'Error al actualizar estado de maduración',
-            'errors': serializer.errors
-        }, status=status.HTTP_400_BAD_REQUEST)
+            serializer = self.get_serializer(lote)
+            return Response(serializer.data)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 class ProductViewSet(RolePermissionMixin, viewsets.ModelViewSet):
     serializer_class = ProductSerializer
@@ -227,6 +336,12 @@ class GoodsReceptionViewSet(RolePermissionMixin, viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsSameBusiness]
     queryset = GoodsReception.objects.all()
     lookup_field = 'uid'
+    
+    def get_serializer_class(self):
+        """Usa el serializer simplificado para listas y el completo para detalles"""
+        if self.action == 'list':
+            return GoodsReceptionListSerializer
+        return GoodsReceptionSerializer
     
     @action(detail=False, methods=['post'])
     def crear_recepcion(self, request):
@@ -369,6 +484,12 @@ class SupplierViewSet(RolePermissionMixin, viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsSameBusiness]
     queryset = Supplier.objects.all()
     lookup_field = 'uid'
+    
+    def get_serializer_class(self):
+        """Utiliza diferentes serializadores según la acción"""
+        if self.action == 'list':
+            return SupplierSerializerList
+        return SupplierSerializer
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -402,7 +523,6 @@ class SupplierViewSet(RolePermissionMixin, viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-
 class ReceptionDetailViewSet(RolePermissionMixin, viewsets.ModelViewSet):
     serializer_class = ReceptionDetailSerializer
     permission_classes = [IsAuthenticated, IsSameBusiness]
@@ -411,69 +531,114 @@ class ReceptionDetailViewSet(RolePermissionMixin, viewsets.ModelViewSet):
     
     @action(detail=False, methods=['post'])
     def bulk_create(self, request):
+        """Actualiza detalles existentes o crea nuevos para una recepción"""
+        import logging
+        logger = logging.getLogger(__name__)
         user = request.user
         perfil = getattr(user, 'perfil', None)
         if perfil is None:
             return Response({'detail': 'Perfil no encontrado para el usuario'}, status=status.HTTP_400_BAD_REQUEST)
-        
+    
         data = request.data
-        if not isinstance(data, list):
-            return Response({'detail': 'Se espera una lista de detalles.'}, status=status.HTTP_400_BAD_REQUEST)
+        logger.info(f"Datos recibidos: {data}")
+        if not isinstance(data, dict) or 'recepcion_uid' not in data or 'detalles' not in data:
+            return Response({
+                'detail': 'Formato incorrecto. Se espera un objeto con recepcion_uid y detalles.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+            
+        recepcion_uid = data['recepcion_uid']
+        detalles_data = data['detalles']
         
+        try:
+            # Verificar que la recepción existe y pertenece al negocio del usuario
+            recepcion = GoodsReception.objects.get(uid=recepcion_uid, business=perfil.business)
+        except GoodsReception.DoesNotExist:
+            return Response({'detail': 'Recepción no encontrada'}, status=status.HTTP_404_NOT_FOUND)
+        
+        detalles_actualizados = []
         detalles_creados = []
         errores = []
         
-        for i, detalle in enumerate(data):
-            # Validar campos obligatorios antes de procesar
-            if 'producto' not in detalle:
-                errores.append({
-                    'indice': i,
-                    'detalle': detalle,
-                    'error': "El campo 'producto' es obligatorio. Debe proporcionar el UUID del producto."
-                })
-                continue
+        for i, detalle_data in enumerate(detalles_data):
+            # Asignar la recepción a cada detalle
+            detalle_data['recepcion'] = recepcion.uid
             
-            # Eliminar el campo business si está presente
-            if 'business' in detalle:
-                del detalle['business']
+            # Verificar si es una actualización o creación
+            es_actualizacion = 'uid' in detalle_data and detalle_data['uid']
             
-            serializer = self.get_serializer(data=detalle)
+            # Log de datos del detalle
+            logger.info(f"Procesando detalle {i}: {detalle_data}")
+            if 'precio_sugerido_min' in detalle_data:
+                logger.info(f"Precio sugerido min: {detalle_data['precio_sugerido_min']} (tipo: {type(detalle_data['precio_sugerido_min'])})")
+            
             try:
-                if serializer.is_valid(raise_exception=False):
-                    detalle_obj = serializer.save()
-                    detalles_creados.append(serializer.data)
+                if es_actualizacion:
+                    # Actualizar detalle existente
+                    try:
+                        # Verificar que el detalle pertenece a la recepción correcta
+                        detalle_obj = ReceptionDetail.objects.get(uid=detalle_data['uid'], recepcion__business=perfil.business)
+                        serializer = self.get_serializer(detalle_obj, data=detalle_data, partial=True)
+                        if serializer.is_valid(raise_exception=False):
+                            logger.info(f"Serializer válido para actualización: {serializer.validated_data}")
+                            serializer.save()  # No pasar business aquí
+                            detalles_actualizados.append(serializer.data)
+                        else:
+                            logger.error(f"Error en serializer para actualización: {serializer.errors}")
+                            errores.append({
+                                'indice': i,
+                                'detalle': detalle_data,
+                                'error': serializer.errors
+                            })
+                    except ReceptionDetail.DoesNotExist:
+                        errores.append({
+                            'indice': i,
+                            'detalle': detalle_data,
+                            'error': 'Detalle no encontrado'
+                        })
                 else:
-                    errores.append({
-                        'indice': i,
-                        'detalle': detalle,
-                        'error': serializer.errors
-                    })
+                    # Crear nuevo detalle
+                    # Validar campos obligatorios
+                    if 'producto' not in detalle_data:
+                        errores.append({
+                            'indice': i,
+                            'detalle': detalle_data,
+                            'error': "El campo 'producto' es obligatorio."
+                        })
+                        continue
+                    
+                    serializer = self.get_serializer(data=detalle_data)
+                    if serializer.is_valid(raise_exception=False):
+                        logger.info(f"Serializer válido para creación: {serializer.validated_data}")
+                        serializer.save()  # No pasar business aquí
+                        detalles_creados.append(serializer.data)
+                    else:
+                        logger.error(f"Error en serializer para creación: {serializer.errors}")
+                        errores.append({
+                            'indice': i,
+                            'detalle': detalle_data,
+                            'error': serializer.errors
+                        })
             except Exception as e:
                 errores.append({
                     'indice': i,
-                    'detalle': detalle,
+                    'detalle': detalle_data,
                     'error': str(e)
                 })
         
         respuesta = {
+            'detalles_actualizados': detalles_actualizados,
             'detalles_creados': detalles_creados,
+            'total_actualizados': len(detalles_actualizados),
             'total_creados': len(detalles_creados),
             'errores': errores
         }
         
-        if len(errores) > 0 and len(detalles_creados) == 0:
+        if len(errores) > 0 and len(detalles_actualizados) == 0 and len(detalles_creados) == 0:
             return Response(respuesta, status=status.HTTP_400_BAD_REQUEST)
         
-        return Response(respuesta, status=status.HTTP_201_CREATED)
+        return Response(respuesta, status=status.HTTP_200_OK)
     
     def perform_create(self, serializer):
-        user = self.request.user
-        perfil = getattr(user, 'perfil', None)
-        if perfil is None:
-            raise ValidationError({'detail': 'Perfil no encontrado para el usuario'})
-        serializer.save(business=perfil.business)
-        
-    def perform_update(self, serializer):
         user = self.request.user
         perfil = getattr(user, 'perfil', None)
         if perfil is None:

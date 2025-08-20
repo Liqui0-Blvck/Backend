@@ -2,7 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from .models import Sale, SalePending, Customer, CustomerPayment
-from .serializers import SaleSerializer, SalePendingSerializer, CustomerSerializer, CustomerPaymentSerializer
+from .serializers import SaleSerializer, SalePendingSerializer, CustomerSerializer, CustomerPaymentSerializer, SaleListSerializer
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from core.permissions import IsSameBusiness
 from django.db import transaction
@@ -11,6 +11,7 @@ from inventory.models import FruitLot
 from django.utils.dateparse import parse_date
 from datetime import datetime, timedelta
 from decimal import Decimal
+from django.db import transaction
 
 class CustomerViewSet(viewsets.ModelViewSet):
     serializer_class = CustomerSerializer
@@ -23,6 +24,7 @@ class CustomerViewSet(viewsets.ModelViewSet):
         perfil = getattr(user, 'perfil', None)
         if perfil is None:
             return Customer.objects.none()
+        
         # Filtrado base por negocio - siempre traemos todos los clientes del negocio
         queryset = Customer.objects.filter(business=perfil.business)
         return queryset
@@ -39,148 +41,55 @@ class SalePendingViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     http_method_names = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']
     lookup_field = 'uid'
+    
+
+
+
 
     def get_queryset(self):
         user = self.request.user
         perfil = getattr(user, 'perfil', None)
         if perfil is None:
             return SalePending.objects.none()
-            
-        # Filtrado base por negocio
-        queryset = SalePending.objects.filter(business=perfil.business)
-        
-        # Filtrado por estado
+
+        queryset = SalePending.objects.filter(business=perfil.business).select_related('vendedor', 'cliente').prefetch_related('items', 'items__lote', 'items__lote__producto')
+
         estado = self.request.query_params.get('estado', None)
         if estado:
-            # Verificamos si es un estado válido
             estados_validos = [choice[0] for choice in SalePending.ESTADO_CHOICES]
             if estado in estados_validos:
                 queryset = queryset.filter(estado=estado)
-        
-        # Filtrado por rango de fechas
+
         start_date_param = self.request.query_params.get('start_date', None)
         end_date_param = self.request.query_params.get('end_date', None)
-        
-        # Si no se proporcionan fechas, usamos los últimos 30 días por defecto
+
         if not start_date_param:
             start_date = datetime.now() - timedelta(days=30)
         else:
-            start_date = parse_date(start_date_param)
-            if not start_date:
-                start_date = datetime.now() - timedelta(days=30)
-        
+            start_date = parse_date(start_date_param) or (datetime.now() - timedelta(days=30))
+
         if not end_date_param:
             end_date = datetime.now()
         else:
-            end_date = parse_date(end_date_param)
-            if not end_date:
-                end_date = datetime.now()
-        
-        # Aseguramos que end_date incluya todo el día
+            end_date = parse_date(end_date_param) or datetime.now()
+
         if end_date:
             end_date = datetime.combine(end_date, datetime.max.time())
-            
+
         return queryset.filter(created_at__range=[start_date, end_date])
 
-    @transaction.atomic
     def perform_create(self, serializer):
-        # Crear SalePending y StockReservation a la vez (campos coherentes)
-        data = self.request.data
-        lote_uid = data.get('lote')
-        cliente_uid = data.get('cliente')  # Ahora esperamos el UID del cliente
-        cantidad_kg = float(data.get('peso_vendido', data.get('cantidad_kg', 0)))
-        cantidad_cajas = int(data.get('cajas_vendidas', data.get('cantidad_cajas', 0)))
-        precio_kg = float(data.get('precio_kg', 0))
-        total = float(data.get('total', 0))
-        metodo_pago = data.get('metodo_pago', '')
-        vendedor_id = data.get('vendedor', None)
-        business_id = data.get('business', None)
-        vendedor = self.request.user
-        comentarios = data.get('comentarios', '')
-        # nombre_cliente = data.get('nombre_cliente')
-        # rut_cliente = data.get('rut_cliente')
-        # telefono_cliente = data.get('telefono_cliente')
-        # email_cliente = data.get('email_cliente')
-        
-        # Obtener el perfil del usuario autenticado
-        perfil = getattr(vendedor, 'perfil', None)
-        if perfil is None:
-            from rest_framework.exceptions import ValidationError
-            raise ValidationError({'detail': 'Usuario sin perfil asociado'})
-        
-        # Usar el business del perfil si no se proporciona
-        if not business_id:
-            business = perfil.business
-        else:
-            from business.models import Business
-            try:
-                business = Business.objects.get(id=business_id)
-            except Business.DoesNotExist:
-                business = perfil.business
+        perfil = getattr(self.request.user, 'perfil', None)
+        if not perfil or not perfil.business:
+            raise ValidationError('El usuario no tiene un perfil o negocio asociado.')
+        serializer.save(vendedor=self.request.user, business=perfil.business)
 
-        # Buscar el cliente por UID si se proporciona
-        nombre_cliente = None
-        rut_cliente = None
-        telefono_cliente = None
-        email_cliente = None
-
-
-        cliente = None
-        if cliente_uid:
-            try:
-                from .models import Customer
-                cliente = Customer.objects.get(uid=cliente_uid)
-                nombre_cliente = cliente.nombre
-                rut_cliente = cliente.rut
-                telefono_cliente = cliente.telefono
-                email_cliente = cliente.email
-            except Customer.DoesNotExist:
-                from rest_framework.exceptions import ValidationError
-                raise ValidationError({'detail': f'Cliente con UID {cliente_uid} no encontrado'})
-
-        from inventory.models import FruitLot, StockReservation
-        # Buscar el lote por uid
-        try:
-            lote = FruitLot.objects.select_for_update().get(uid=lote_uid)
-        except FruitLot.DoesNotExist:
-            from rest_framework.exceptions import ValidationError
-            raise ValidationError({'detail': f'Lote con UID {lote_uid} no encontrado'})
-            
-        # Verificar stock disponible
-        peso_disponible = lote.peso_disponible()
-        if peso_disponible < cantidad_kg:
-            from rest_framework.exceptions import ValidationError
-            raise ValidationError({'detail': f'Stock insuficiente en el lote. Disponible: {peso_disponible}kg, Solicitado: {cantidad_kg}kg'})
-        
-        # Crea SalePending
-        sale_pending = serializer.save(
-            lote=lote,
-            cliente=cliente,
-            cantidad_kg=cantidad_kg,
-            cantidad_cajas=cantidad_cajas,
-            nombre_cliente=nombre_cliente,
-            rut_cliente=rut_cliente,
-            telefono_cliente=telefono_cliente,
-            email_cliente=email_cliente,
-            vendedor=vendedor,
-            comentarios=comentarios,
-            business=business,
-            estado="pendiente"
-        )
-        
-        # Crea StockReservation coherente
-        StockReservation.objects.create(
-            lote=lote,
-            usuario=vendedor,
-            cantidad_kg=cantidad_kg,
-            cantidad_cajas=cantidad_cajas,
-            cliente=cliente,
-            nombre_cliente=None if cliente else nombre_cliente,
-            rut_cliente=None if cliente else rut_cliente,
-            telefono_cliente=None if cliente else telefono_cliente,
-            email_cliente=None if cliente else email_cliente,
-            estado="en_proceso",
-        )
+    def perform_update(self, serializer):
+        perfil = getattr(self.request.user, 'perfil', None)
+        if not perfil or not perfil.business:
+            raise ValidationError('El usuario no tiene un perfil o negocio asociado.')
+        # No sobrescribir el estado ni otros campos importantes
+        serializer.save(business=perfil.business)
 
 
 class CustomerViewSet(viewsets.ModelViewSet):
@@ -245,6 +154,11 @@ class SaleViewSet(viewsets.ModelViewSet):
     serializer_class = SaleSerializer
     permission_classes = [IsAuthenticated, IsSameBusiness]
     lookup_field = 'uid'
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return SaleListSerializer
+        return self.serializer_class
     
     @action(detail=False, methods=['get'])
     def customers(self, request):
@@ -325,7 +239,7 @@ class SaleViewSet(viewsets.ModelViewSet):
         # Filtrado por lote
         lote_uid = self.request.query_params.get('lote', None)
         if lote_uid:
-            queryset = queryset.filter(lote__uid=lote_uid)
+            queryset = queryset.filter(items__lote__uid=lote_uid).distinct()
         
         # Filtrado por cliente
         cliente_uid = self.request.query_params.get('cliente', None)

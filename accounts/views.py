@@ -312,12 +312,26 @@ class MeView(APIView):
         from business.models import BusinessConfig
         from business.serializers import BusinessConfigSerializer
         
-        config, created = BusinessConfig.objects.get_or_create(
-            user=perfil,
-            defaults={
-                'default_view_mode': 'standard'
-            }
-        )
+        # Manejar el caso donde existen múltiples configuraciones
+        business_configs = BusinessConfig.objects.filter(user=perfil)
+        
+        if business_configs.exists():
+            # Si hay múltiples configuraciones, usar la primera
+            config = business_configs.first()
+            created = False
+            
+            # Si hay más de una configuración, registrar un mensaje de advertencia
+            if business_configs.count() > 1:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Multiple BusinessConfig objects found for user {perfil.id}. Using the first one.")
+        else:
+            # Si no existe ninguna configuración, crearla
+            config = BusinessConfig.objects.create(
+                user=perfil,
+                default_view_mode='standard'
+            )
+            created = True
         
         # Obtener o crear la configuración del usuario
         from .models import ConfiguracionUsuario

@@ -1,6 +1,6 @@
 from django.db.models.signals import post_save, m2m_changed, pre_save
 from django.dispatch import receiver
-from .models import Sale, CustomerPayment, Customer, SalePending
+from .models import Sale, CustomerPayment, Customer, SalePending, SaleItem, SalePendingItem
 from django.db import transaction, models
 from django.utils import timezone
 from decimal import Decimal
@@ -10,79 +10,9 @@ import uuid
 
 logger = logging.getLogger(__name__)
 
-@receiver(pre_save, sender=SalePending)
-def convert_pending_to_sale(sender, instance, **kwargs):
-    """
-    Signal que se activa antes de guardar una venta pendiente.
-    Si el estado cambia a 'confirmada', crea una venta (Sale) a partir de la venta pendiente.
-    """
-    logger.info(f"Signal pre_save activado para SalePending {instance.pk} - Estado: {instance.estado}")
-    
-    # Verificar si es una instancia existente (no nueva)
-    if instance.pk:
-        try:
-            # Obtener el estado anterior
-            old_instance = SalePending.objects.get(pk=instance.pk)
-            logger.info(f"Estado anterior: {old_instance.estado}, Estado nuevo: {instance.estado}")
-            
-            # Si el estado cambió a 'confirmada'
-            if old_instance.estado != 'confirmada' and instance.estado == 'confirmada':
-                with transaction.atomic():
-                    # Determinar si el producto es tipo palta u otro
-                    es_palta = instance.lote.producto and instance.lote.producto.tipo_producto == 'palta'
-                    
-                    # Calcular el total si no está definido
-                    if not instance.total:
-                        if es_palta and instance.precio_kg:
-                            total_calculado = instance.precio_kg * instance.cantidad_kg
-                        elif not es_palta and hasattr(instance, 'precio_unidad'):
-                            total_calculado = instance.precio_unidad * instance.cantidad_unidades
-                        else:
-                            total_calculado = Decimal('0')
-                    else:
-                        total_calculado = instance.total
-                    
-                    # Crear una nueva venta a partir de la venta pendiente
-                    sale = Sale(
-                        uid=uuid.uuid4(),  # Generar nuevo UUID
-                        codigo_venta=instance.codigo_venta,  # Transferir el código de venta
-                        lote=instance.lote,
-                        cliente=instance.cliente,
-                        vendedor=instance.vendedor,
-                        # Campos para productos tipo palta
-                        peso_vendido=instance.cantidad_kg if es_palta else 0,
-                        precio_kg=instance.precio_kg or 0 if es_palta else 0,
-                        # Campos para productos tipo otro
-                        unidades_vendidas=instance.cantidad_unidades if not es_palta else 0,
-                        precio_unidad=getattr(instance, 'precio_unidad', 0) if not es_palta else 0,
-                        # Campos comunes
-                        cajas_vendidas=instance.cantidad_cajas,
-                        total=total_calculado,
-                        metodo_pago=instance.metodo_pago or 'efectivo',
-                        comprobante=instance.comprobante,
-                        business=instance.business,
-                        fecha_vencimiento=instance.fecha_vencimiento or (timezone.now() + timezone.timedelta(days=30)),
-                        pagado=False,  # Por defecto, la venta no está pagada
-                        saldo_pendiente=total_calculado,
-                        estado_pago='pendiente'
-                    )
-                    sale.save()
-                    
-                    # Actualizar la reserva de stock a 'confirmada'
-                    StockReservation.objects.filter(
-                        lote=instance.lote,
-                        cantidad_kg=instance.cantidad_kg,
-                        cantidad_cajas=instance.cantidad_cajas,
-                        estado='en_proceso'
-                    ).update(estado='confirmada')
-                    
-                    logger.info(f"Venta pendiente {instance.pk} convertida a venta confirmada {sale.pk}")
-        except SalePending.DoesNotExist:
-            # Es una nueva instancia, no hacer nada
-            pass
-        except Exception as e:
-            logger.error(f"Error al convertir venta pendiente a confirmada: {str(e)}")
-            # No propagar la excepción para evitar bloquear el guardado
+# NOTA: El signal pre_save para SalePending ha sido eliminado
+# La conversión de venta pendiente a venta directa ahora se maneja
+# en el método update del serializador SalePendingSerializer
 
 @receiver(post_save, sender=Sale)
 def update_customer_credit(sender, instance, created, **kwargs):
@@ -136,75 +66,53 @@ def update_customer_balance(sender, instance, created, **kwargs):
         # son propiedades calculadas que consultan los pagos y ventas en tiempo real
 
 
-@receiver(post_save, sender=Sale)
+@receiver(post_save, sender=SaleItem)
 def update_fruit_lot_inventory(sender, instance, created, **kwargs):
     """
-    Señal que se activa después de guardar una venta.
-    Actualiza el inventario del lote de fruta, descontando las cajas y kilos/unidades vendidos
-    según el tipo de producto (palta o otro).
+    Señal que se activa después de guardar un SaleItem.
+    Actualiza el inventario del lote de fruta asociado, descontando
+    las cajas y kilos/unidades vendidos.
     """
-    # Solo procesar si es una venta nueva (creación) o si se está actualizando una venta existente
-    # pero solo si no se está actualizando desde otra señal para evitar recursión
-    if kwargs.get('update_fields') is None or 'updated_at' not in kwargs.get('update_fields', []):
+    if created:
         try:
             with transaction.atomic():
-                # Obtener el lote de fruta asociado a la venta
-                lote = instance.lote
-                
-                # Verificar que el lote existe
+                item = instance
+                lote = item.lote
+
                 if not lote:
-                    logger.error(f"No se encontró el lote asociado a la venta {instance.codigo_venta or instance.id}")
+                    logger.warning(f"SaleItem {item.pk} no tiene lote asociado, no se actualiza inventario.")
                     return
-                
-                # Si es una venta nueva, descontar del inventario
-                if created:
-                    logger.info(f"Actualizando inventario para lote {lote.uid} - Venta: {instance.codigo_venta}")
-                    
-                    # Descontar cajas vendidas (común para ambos tipos de productos)
-                    if instance.cajas_vendidas > 0:
-                        lote.cantidad_cajas = max(0, lote.cantidad_cajas - instance.cajas_vendidas)
-                    
-                    # Actualizar inventario según tipo de producto
-                    if lote.producto and lote.producto.tipo_producto == 'palta':
-                        # Para productos tipo palta: actualizar por peso
-                        if instance.peso_vendido > Decimal('0'):
-                            # Actualizamos directamente el peso_neto
-                            if lote.peso_neto is not None:
-                                lote.peso_neto = max(Decimal('0'), lote.peso_neto - instance.peso_vendido)
-                        
-                        # Actualizar estado del lote según disponibilidad de peso y cajas
-                        if lote.cantidad_cajas == 0 and (lote.peso_neto is None or lote.peso_neto <= Decimal('0')):
-                            lote.estado_lote = 'agotado'
-                            # Guardar cambios en el lote incluyendo el estado_lote
-                            lote.save(update_fields=['cantidad_cajas', 'peso_neto', 'estado_lote', 'updated_at'])
-                            logger.info(f"Lote {lote.uid} marcado como agotado: cajas={lote.cantidad_cajas}, peso_neto={lote.peso_neto}")
-                        else:
-                            # Guardar cambios en el lote sin modificar estado_lote
-                            lote.save(update_fields=['cantidad_cajas', 'peso_neto', 'updated_at'])
-                        logger.info(f"Inventario actualizado (palta): Lote {lote.uid} - Disponible: {lote.peso_neto}kg/{lote.cantidad_cajas}cajas")
-                    else:
-                        # Para productos tipo otro: actualizar por unidades
-                        if hasattr(instance, 'unidades_vendidas') and instance.unidades_vendidas > 0:
-                            lote.cantidad_unidades = max(0, lote.cantidad_unidades - instance.unidades_vendidas)
-                            lote.unidades_reservadas = max(0, lote.unidades_reservadas - instance.unidades_vendidas)
-                        
-                        # Actualizar estado del lote según disponibilidad de unidades y cajas
-                        if lote.cantidad_cajas == 0 and lote.cantidad_unidades == 0:
-                            lote.estado_lote = 'agotado'
-                            # Guardar cambios en el lote incluyendo el estado_lote
-                            lote.save(update_fields=['cantidad_cajas', 'cantidad_unidades', 'unidades_reservadas', 'estado_lote', 'updated_at'])
-                            logger.info(f"Lote {lote.uid} marcado como agotado: cajas={lote.cantidad_cajas}, unidades={lote.cantidad_unidades}")
-                        else:
-                            # Guardar cambios en el lote sin modificar estado_lote
-                            lote.save(update_fields=['cantidad_cajas', 'cantidad_unidades', 'unidades_reservadas', 'updated_at'])
-                        logger.info(f"Inventario actualizado (otro): Lote {lote.uid} - Disponible: {lote.cantidad_unidades}unidades/{lote.cantidad_cajas}cajas")
-        
+
+                es_palta = lote.producto and lote.producto.tipo_producto == 'palta'
+
+                if es_palta:
+                    # Lógica para paltas (descontar cajas y peso)
+                    if item.unidades_vendidas > 0:
+                        lote.cantidad_cajas = max(0, lote.cantidad_cajas - item.unidades_vendidas)
+                    if item.peso_vendido > 0:
+                        lote.peso_neto = max(Decimal('0.0'), lote.peso_neto - item.peso_vendido)
+                    # Actualizar estado si se agotan las cajas
+                    if lote.cantidad_cajas <= 0:
+                        lote.estado_lote = 'agotado'
+                else:
+                    # Lógica para otros productos (descontar cajas y unidades)
+                    if item.unidades_vendidas > 0:
+                        lote.cantidad_cajas = max(0, lote.cantidad_cajas - item.unidades_vendidas)
+                        if hasattr(lote, 'cantidad_unidades'):
+                            # Asumimos que unidades_vendidas en SaleItem son las cajas
+                            unidades_a_descontar = item.unidades_vendidas * (lote.unidades_por_caja or 1)
+                            lote.cantidad_unidades = max(0, lote.cantidad_unidades - unidades_a_descontar)
+                    # Actualizar estado si se agotan las cajas o las unidades
+                    if lote.cantidad_cajas <= 0 or (hasattr(lote, 'cantidad_unidades') and lote.cantidad_unidades <= 0):
+                        lote.estado_lote = 'agotado'
+
+                lote.save()
+                logger.info(f"Inventario actualizado para Lote {lote.uid} via SaleItem {item.pk}: Cajas={lote.cantidad_cajas}, Peso={lote.peso_neto}, Unidades={getattr(lote, 'cantidad_unidades', 'N/A')}")
+
         except Exception as e:
-            logger.error(f"Error al actualizar inventario para venta {instance.codigo_venta or instance.id}: {str(e)}")
-            # Registrar más detalles para depuración
+            logger.error(f"Error al actualizar inventario para SaleItem {instance.pk}: {str(e)}")
             import traceback
             logger.error(traceback.format_exc())
-
 
 
 @receiver(m2m_changed, sender=CustomerPayment.ventas.through)

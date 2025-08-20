@@ -138,16 +138,11 @@ class Sale(BaseModel):
         ("transbank", "Transbank Manual"),
         ("credito", "Credito")
     ]
-    lote = models.ForeignKey('inventory.FruitLot', on_delete=models.CASCADE)
+    # Eliminamos la referencia directa al lote para permitir múltiples productos
     cliente = models.ForeignKey('Customer', on_delete=models.SET_NULL, null=True, blank=True, related_name='sales')
     vendedor = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE)
-    # Campos para productos tipo palta (por peso)
-    peso_vendido = models.DecimalField(max_digits=7, decimal_places=2, default=0, help_text="Peso vendido en kg (para productos tipo palta)")
-    precio_kg = models.DecimalField(max_digits=7, decimal_places=2, default=0, help_text="Precio por kg (para productos tipo palta)")
-    
-    # Campos para productos tipo otro (por unidades)
-    unidades_vendidas = models.PositiveIntegerField(default=0, help_text="Cantidad de unidades vendidas (para productos que no son palta)")
-    precio_unidad = models.DecimalField(max_digits=7, decimal_places=2, default=0, help_text="Precio por unidad (para productos que no son palta)")
+    # Ya no necesitamos campos específicos para cada tipo de producto a nivel de venta
+    # porque ahora cada item de venta tendrá sus propios campos
     
     # Común para ambos tipos
     cajas_vendidas = models.PositiveIntegerField(default=0)
@@ -169,13 +164,20 @@ class Sale(BaseModel):
     estado_pago = models.CharField(max_length=20, choices=ESTADO_CHOICES, default="pendiente", help_text="Estado del pago de la venta")
     
     # Campos para cancelación/anulación (soft delete)
-    cancelada = models.BooleanField(default=False, help_text="Indica si la venta ha sido cancelada/anulada")
-    fecha_cancelacion = models.DateTimeField(null=True, blank=True, help_text="Fecha y hora de cancelación")
-    motivo_cancelacion = models.TextField(blank=True, help_text="Motivo de la cancelación")
-    cancelada_por = models.ForeignKey('accounts.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, 
-                                     related_name='ventas_canceladas', help_text="Usuario que canceló la venta")
-    autorizada_por = models.ForeignKey('accounts.CustomUser', on_delete=models.SET_NULL, null=True, blank=True,
-                                      related_name='ventas_autorizadas_cancelacion', help_text="Usuario que autorizó la cancelación")
+    cancelada = models.BooleanField(default=False)
+    fecha_cancelacion = models.DateTimeField(null=True, blank=True)
+    motivo_cancelacion = models.TextField(blank=True, null=True)
+    cancelada_por = models.ForeignKey('accounts.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='ventas_canceladas')
+    autorizada_por = models.ForeignKey('accounts.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='ventas_autorizadas')
+    
+    # Campos para concesión
+    es_concesion = models.BooleanField(default=False, help_text="Indica si esta venta incluye productos en concesión")
+    comision_ganada = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, 
+                                        help_text="Comisión total ganada por la venta de productos en concesión")
+    proveedor_original = models.ForeignKey('inventory.Supplier', on_delete=models.SET_NULL, 
+                                         related_name='ventas_concesion',
+                                         null=True, blank=True,
+                                         help_text="Proveedor propietario original del producto en concesión")
 
     history = HistoricalRecords()
 
@@ -266,11 +268,80 @@ class Sale(BaseModel):
         cliente_str = self.cliente.nombre if self.cliente else 'Ocasional'
         estado_str = " [CANCELADA]" if self.cancelada else ""
         
-        # Mostrar información según el tipo de producto
-        if self.lote.producto and self.lote.producto.tipo_producto == 'palta':
-            return f"Venta {self.codigo_venta or self.id} - Lote {self.lote_id} - {self.peso_vendido}kg - Cliente: {cliente_str}{estado_str}"
-        else:
-            return f"Venta {self.codigo_venta or self.id} - Lote {self.lote_id} - {self.unidades_vendidas}unidades - Cliente: {cliente_str}{estado_str}"
+        # Nuevo formato para el modelo con múltiples ítems
+        items_count = self.items.count()
+        total_str = f"${self.total}" if self.total else ""
+        
+        return f"Venta {self.codigo_venta or self.id} - {items_count} productos - {total_str} - Cliente: {cliente_str}{estado_str}"
+
+class SaleItem(BaseModel):
+    """Modelo para representar los ítems individuales de una venta"""
+    uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
+    venta = models.ForeignKey('Sale', on_delete=models.CASCADE, related_name='items')
+    lote = models.ForeignKey('inventory.FruitLot', on_delete=models.PROTECT)
+    
+    # Campos para productos tipo palta (por peso)
+    peso_vendido = models.DecimalField(max_digits=7, decimal_places=2, default=0, 
+                                     help_text="Peso vendido en kg (para productos tipo palta)")
+    precio_kg = models.DecimalField(max_digits=7, decimal_places=2, default=0, 
+                                  help_text="Precio por kg (para productos tipo palta)")
+    
+    # Campos para productos tipo otro (por unidades)
+    unidades_vendidas = models.PositiveIntegerField(default=0, 
+                                                 help_text="Cantidad de unidades vendidas (para productos que no son palta)")
+    precio_unidad = models.DecimalField(max_digits=7, decimal_places=2, default=0, 
+                                      help_text="Precio por unidad (para productos que no son palta)")
+    
+    # Campos comunes
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2, 
+                                 help_text="Subtotal del ítem (precio * cantidad)")
+    
+    # Campos para concesión
+    es_concesion = models.BooleanField(default=False, 
+                                     help_text="Indica si este ítem es de un producto en concesión")
+    comision_ganada = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, 
+                                        help_text="Comisión ganada por la venta de este ítem en concesión")
+    proveedor_original = models.ForeignKey('inventory.Supplier', on_delete=models.PROTECT, 
+                                         related_name='items_vendidos_concesion',
+                                         null=True, blank=True,
+                                         help_text="Proveedor propietario original del producto en concesión")
+    
+    def save(self, *args, **kwargs):
+        # Verificar si es un objeto nuevo (sin ID aún)
+        is_new = self.pk is None
+        
+        # Guardar el objeto
+        super().save(*args, **kwargs)
+        
+        # Si es un objeto nuevo, actualizar el inventario
+        if is_new and not self.venta.cancelada:
+            # Actualizar el inventario del lote
+            if self.lote:
+                # Para productos tipo palta, actualizar por peso
+                if self.lote.producto and self.lote.producto.tipo_producto == 'palta':
+                    # Actualizar peso neto
+                    if self.peso_vendido > 0:
+                        self.lote.peso_neto = max(0, self.lote.peso_neto - self.peso_vendido)
+                        
+                # Para todos los productos, actualizar cajas
+                if self.unidades_vendidas > 0:
+                    self.lote.cantidad_cajas = max(0, self.lote.cantidad_cajas - self.unidades_vendidas)
+                    
+                # Guardar los cambios en el lote
+                self.lote.save(update_fields=['peso_neto', 'cantidad_cajas', 'updated_at'])
+    
+    def __str__(self):
+        if self.lote and self.lote.producto:
+            if self.lote.producto.tipo_producto == 'palta':
+                return f"Ítem {self.id} - {self.lote.producto.nombre} - {self.peso_vendido}kg"
+            else:
+                return f"Ítem {self.id} - {self.lote.producto.nombre} - {self.unidades_vendidas}unidades"
+        return f"Ítem {self.id}"
+    
+    class Meta:
+        verbose_name = _("Sale Item")
+        verbose_name_plural = _("Sale Items")
+
 
 class SalePending(BaseModel):
     uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
@@ -283,14 +354,10 @@ class SalePending(BaseModel):
         ("expirada", "Expirada"),
     ]
     # Campos básicos de la venta pendiente
-    lote = models.ForeignKey('inventory.FruitLot', on_delete=models.CASCADE)
     cliente = models.ForeignKey(Customer, on_delete=models.SET_NULL, null=True, blank=True)
     
-    # Campos para productos tipo palta (por peso)
-    cantidad_kg = models.DecimalField(max_digits=7, decimal_places=2, default=0, help_text="Cantidad en kg (para productos tipo palta)")
-    
-    # Campos para productos tipo otro (por unidades)
-    cantidad_unidades = models.PositiveIntegerField(default=0, help_text="Cantidad de unidades (para productos que no son palta)")
+    # Ya no necesitamos campos específicos para cada tipo de producto a nivel de venta pendiente
+    # porque ahora cada item de venta pendiente tendrá sus propios campos
     
     # Común para ambos tipos
     cantidad_cajas = models.PositiveIntegerField(default=0)
@@ -316,11 +383,57 @@ class SalePending(BaseModel):
 
     history = HistoricalRecords()
 
+    def save(self, *args, **kwargs):
+        if not self.codigo_venta:
+            today = datetime.now().strftime('%Y%m%d')
+            prefix = f'PRE-{today}-'
+            last_pending_sale = SalePending.objects.filter(codigo_venta__startswith=prefix).order_by('-codigo_venta').first()
+            
+            last_number = 0
+            if last_pending_sale and last_pending_sale.codigo_venta:
+                try:
+                    last_number = int(last_pending_sale.codigo_venta.split('-')[-1])
+                except (ValueError, IndexError):
+                    last_number = 0 # Fallback en caso de formato inesperado
+            
+            self.codigo_venta = f'{prefix}{last_number + 1:05d}'
+        
+        super().save(*args, **kwargs)
+
     def __str__(self):
         cliente_str = self.cliente.nombre if self.cliente else (self.nombre_cliente or '')
-        
-        # Mostrar información según el tipo de producto
-        if self.lote.producto and self.lote.producto.tipo_producto == 'palta':
-            return f"Pre-reserva {self.id} - Lote {self.lote_id} - {self.cantidad_kg}kg/{self.cantidad_cajas}cajas - {self.estado} ({cliente_str})"
-        else:
-            return f"Pre-reserva {self.id} - Lote {self.lote_id} - {self.cantidad_unidades}unidades/{self.cantidad_cajas}cajas - {self.estado} ({cliente_str})"
+        return f"Pre-reserva {self.id} - {self.estado} ({cliente_str})"
+
+
+class SalePendingItem(BaseModel):
+    """Modelo para representar los ítems individuales de una venta pendiente"""
+    uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
+    venta_pendiente = models.ForeignKey('SalePending', on_delete=models.CASCADE, related_name='items')
+    lote = models.ForeignKey('inventory.FruitLot', on_delete=models.PROTECT)
+    
+    # Campos para productos tipo palta (por peso)
+    cantidad_kg = models.DecimalField(max_digits=7, decimal_places=2, default=0, 
+                                   help_text="Cantidad en kg (para productos tipo palta)")
+    precio_kg = models.DecimalField(max_digits=7, decimal_places=2, default=0, 
+                                  help_text="Precio por kg (para productos tipo palta)")
+    
+    # Campos para productos tipo otro (por unidades)
+    cantidad_unidades = models.PositiveIntegerField(default=0) 
+    precio_unidad = models.DecimalField(max_digits=7, decimal_places=2, default=0, 
+                                      help_text="Precio por unidad (para productos que no son palta)")
+    
+    # Campos comunes
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2, 
+                                 help_text="Subtotal del ítem (precio * cantidad)")
+    
+    def __str__(self):
+        if self.lote and self.lote.producto:
+            if self.lote.producto.tipo_producto == 'palta':
+                return f"Ítem pendiente {self.id} - {self.lote.producto.nombre} - {self.cantidad_kg}kg"
+            else:
+                return f"Ítem pendiente {self.id} - {self.lote.producto.nombre} - {self.cantidad_unidades}unidades"
+        return f"Ítem pendiente {self.id}"
+    
+    class Meta:
+        verbose_name = _("Sale Pending Item")
+        verbose_name_plural = _("Sale Pending Items")

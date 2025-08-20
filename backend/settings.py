@@ -205,7 +205,7 @@ else:
             'NAME': os.environ.get('POSTGRES_DB', 'fruitpos'),
             'USER': os.environ.get('POSTGRES_USER', 'fruitpos_user'),
             'PASSWORD': os.environ.get('POSTGRES_PASSWORD', ''),
-            'HOST': os.environ.get('POSTGRES_HOST', 'db'),
+            'HOST': os.environ.get('POSTGRES_HOST', 'backend-db-1'),
             'PORT': os.environ.get('POSTGRES_PORT', '5432'),
             'OPTIONS': {
                 'connect_timeout': 60,

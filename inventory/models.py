@@ -28,6 +28,14 @@ class Product(BaseModel):
 
     history = HistoricalRecords()
 
+    def save(self, *args, **kwargs):
+        """Asegura que el tipo de producto se asigne automáticamente."""
+        if 'palta' in self.nombre.lower():
+            self.tipo_producto = 'palta'
+        else:
+            self.tipo_producto = 'otro'
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.nombre} ({self.marca})"
 
@@ -59,6 +67,17 @@ class FruitLot(BaseModel):
     proveedor = models.CharField(max_length=64)
     procedencia = models.CharField(max_length=64)
     pais = models.CharField(max_length=32)
+    
+    # Campos para concesión
+    en_concesion = models.BooleanField(default=False, help_text="Indica si el lote está en concesión")
+    comision_por_kilo = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True,
+                                          help_text="Comisión por kilo vendido (para lotes en concesión)")
+    fecha_limite_concesion = models.DateField(null=True, blank=True,
+                                            help_text="Fecha límite para vender el lote en concesión")
+    propietario_original = models.ForeignKey('Supplier', on_delete=models.PROTECT, 
+                                           related_name='lotes_en_concesion',
+                                           null=True, blank=True,
+                                           help_text="Proveedor propietario original del lote en concesión")
     calibre = models.CharField(max_length=16)
     box_type = models.ForeignKey('BoxType', on_delete=models.CASCADE)
     pallet_type = models.ForeignKey('PalletType', on_delete=models.CASCADE, null=True, blank=True)
@@ -110,7 +129,7 @@ class FruitLot(BaseModel):
         # Evitar importación circular usando el modelo directamente
         neto = float(self.peso_neto or 0)
         # Usamos el modelo desde el mismo app sin importarlo
-        reservado = self.__class__._meta.apps.get_model('inventory', 'StockReservation').objects.filter(lote=self).aggregate(total=Sum('cantidad_kg'))['total'] or 0
+        reservado = self.__class__._meta.apps.get_model('inventory', 'StockReservation').objects.filter(lote=self, estado='en_proceso').aggregate(total=Sum('kg_reservados'))['total'] or 0
         return neto - float(reservado) if neto > float(reservado) else 0
         
     def unidades_disponibles(self):
@@ -119,7 +138,7 @@ class FruitLot(BaseModel):
         if not self.producto or self.producto.tipo_producto != 'otro':
             return 0
             
-        return max(0, self.cantidad_unidades - self.unidades_reservadas)
+        return max(0, self.cantidad_cajas - self.unidades_reservadas)
 
     def save(self, *args, **kwargs):
         from django.core.exceptions import ValidationError
@@ -140,8 +159,7 @@ class FruitLot(BaseModel):
                 # Validaciones para productos tipo otro (por unidades)
                 if self.cantidad_unidades < 0:
                     raise ValidationError('No puedes tener unidades negativas en el lote.')
-                if self.unidades_por_caja <= 0 and self.cantidad_cajas > 0:
-                    raise ValidationError('Debes especificar cuántas unidades hay por caja.')
+
                 # Actualizar cantidad_unidades basado en cajas si es necesario
                 if self.unidades_por_caja > 0 and self.cantidad_unidades == 0:
                     self.cantidad_unidades = self.cantidad_cajas * self.unidades_por_caja
@@ -153,9 +171,17 @@ class FruitLot(BaseModel):
         # Actualiza estado_lote automáticamente
         if self.cantidad_cajas == 0:
             self.estado_lote = 'agotado'
-        elif self.cantidad_cajas > 0 and self.estado_lote == 'agotado':
-            self.estado_lote = 'activo'
-            
+        if self.estado_lote != 'agotado':
+            es_palta = self.producto and self.producto.tipo_producto == 'palta'
+            if es_palta:
+                if self.peso_neto <= 0:
+                    # self.estado_lote = 'agotado'
+                    pass
+            else:
+                if self.cantidad_cajas <= 0:
+                    # self.estado_lote = 'agotado'
+                    pass
+        
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -178,13 +204,11 @@ class StockReservation(BaseModel):
         ("expirada", "Expirada"),
     ]
     lote = models.ForeignKey('FruitLot', on_delete=models.CASCADE, related_name='reservas')
+    item_venta_pendiente = models.OneToOneField('sales.SalePendingItem', on_delete=models.CASCADE, related_name='reserva', null=True, blank=True)
     usuario = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE)
-    # Campos para productos tipo palta (por peso)
-    cantidad_kg = models.DecimalField(max_digits=7, decimal_places=2, default=0)
-    # Campos para productos tipo otro (por unidades)
-    cantidad_unidades = models.PositiveIntegerField(default=0, help_text="Cantidad de unidades reservadas (para productos que no son palta)")
-    # Común para ambos tipos
-    cantidad_cajas = models.PositiveIntegerField(default=0)
+    cajas_reservadas = models.PositiveIntegerField(default=0, help_text="Cantidad de cajas reservadas para la venta.")
+    kg_reservados = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text="Cantidad de kilogramos reservados (para paltas).")
+    unidades_reservadas = models.PositiveIntegerField(default=0, help_text="Cantidad de unidades reservadas (para otros productos).")
     # Cliente frecuente (opcional)
     cliente = models.ForeignKey('sales.Customer', on_delete=models.SET_NULL, null=True, blank=True)
     # Datos básicos del cliente ocasional
@@ -203,9 +227,9 @@ class StockReservation(BaseModel):
     def __str__(self):
         cliente_str = self.cliente.nombre if self.cliente else (self.nombre_cliente or '')
         if self.lote.producto and self.lote.producto.tipo_producto == 'palta':
-            return f"Reserva {self.id} - Lote {self.lote_id} - {self.cantidad_kg}kg/{self.cantidad_cajas}cajas - {self.estado} ({cliente_str})"
+            return f"Reserva {self.id} - Lote {self.lote_id} - {self.kg_reservados}kg/{self.cajas_reservadas}cajas - {self.estado} ({cliente_str})"
         else:
-            return f"Reserva {self.id} - Lote {self.lote_id} - {self.cantidad_unidades}unidades/{self.cantidad_cajas}cajas - {self.estado} ({cliente_str})"
+            return f"Reserva {self.id} - Lote {self.lote_id} - {self.unidades_reservadas}unidades/{self.cajas_reservadas}cajas - {self.estado} ({cliente_str})"
 
 class Supplier(BaseModel):
     uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
@@ -237,12 +261,21 @@ class GoodsReception(BaseModel):
     Modelo principal para registrar la recepción de mercadería (fruta) en bodega.
     Funciona como una guía de entrada que documenta la llegada de productos.
     """
+    # Campos para concesión
+    en_concesion = models.BooleanField(default=False, 
+                                      help_text="Indica si la mercancía está en concesión")
+    comision_por_kilo = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True,
+                                          help_text="Comisión por kilo vendido (para mercancía en concesión)")
+    fecha_limite_concesion = models.DateField(null=True, blank=True,
+                                            help_text="Fecha límite para vender la mercancía en concesión")
     ESTADO_CHOICES = [
         ("pendiente", "Pendiente de revisión"),
         ("revisado", "Revisado"),
         ("aprobado", "Aprobado"),
         ("rechazado", "Rechazado parcial/total"),
     ]
+    
+    estado_pago = models.CharField(max_length=16, choices=[('pendiente', 'Pendiente'), ('pagado', 'Pagado')], default='pendiente')
     
     # Información general
     numero_guia = models.CharField(max_length=50, unique=True, blank=True, null=True, help_text="Número de guía interna")
@@ -380,9 +413,19 @@ class ReceptionDetail(BaseModel):
     porcentaje_perdida_estimado = models.DecimalField(max_digits=5, decimal_places=2, default=0,
                                                    help_text="Porcentaje estimado de pérdida para este lote")
     
+    # Campos para concesión
+    en_concesion = models.BooleanField(default=False, help_text="Indica si este lote está en concesión")
+    comision_por_kilo = models.DecimalField(max_digits=10, decimal_places=2, default=0, 
+                                         help_text="Comisión por kilo para lotes en concesión")
+    fecha_limite_concesion = models.DateField(blank=True, null=True, 
+                                           help_text="Fecha límite para vender el producto en concesión")
+    
     # Campos para trazabilidad
     lote_creado = models.ForeignKey('FruitLot', on_delete=models.SET_NULL, 
                                    blank=True, null=True, related_name='detalle_recepcion')
+    
+    precio_sugerido_min = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True, help_text="Precio mínimo sugerido por kg o unidad")
+    precio_sugerido_max = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True, help_text="Precio máximo sugerido por kg o unidad")
     
     history = HistoricalRecords()
     
@@ -432,51 +475,72 @@ def crear_lotes_al_aprobar_recepcion(sender, instance, created, **kwargs):
     lotes de fruta (FruitLot) para cada detalle de la recepción que no tenga
     un lote asociado aún.
     """
-    # Solo proceder si la recepción está en estado aprobado
-    if instance.estado == "aprobado":
-        # Procesar solo detalles que no tienen lote creado aún
-        detalles_sin_lote = instance.detalles.filter(lote_creado__isnull=True)
-        
-        # Usar una bandera para evitar recursividad y duplicación
-        if not hasattr(instance, '_lotes_creados') or not instance._lotes_creados:
-            # Marcar que ya se procesaron los lotes para esta instancia
-            instance._lotes_creados = True
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # Solo proceder si la recepción está en estado aprobado
+        if instance.estado == "aprobado":
+            logger.info(f"Procesando recepción {instance.numero_guia} para crear lotes")
             
-            for detalle in detalles_sin_lote:
-                # Crear un nuevo lote de fruta basado en el detalle de recepción
-                lote = FruitLot(
-                    producto=detalle.producto,
-                    marca=detalle.variedad or "",  # Usar variedad como marca si está disponible
-                    proveedor=instance.proveedor.nombre,
-                    procedencia=instance.proveedor.direccion or "No especificada",
-                    pais="Chile",  # Valor por defecto, podría ser un campo en Proveedor
-                    calibre=detalle.calibre or "No especificado",
-                    box_type=detalle.box_type,
-                    cantidad_cajas=detalle.cantidad_cajas,
-                    peso_bruto=detalle.peso_bruto,
-                    peso_neto=detalle.peso_neto,
-                    business=instance.business,
-                    fecha_ingreso=instance.fecha_recepcion.date(),
-                    estado_maduracion=detalle.estado_maduracion or "verde",
-                    costo_inicial=detalle.costo,  # Usar el costo del detalle de recepción
-                    porcentaje_perdida_estimado=detalle.porcentaje_perdida_estimado,  # Usar el porcentaje de pérdida estimado del detalle
-                )
+            # Procesar solo detalles que no tienen lote creado aún
+            detalles_sin_lote = instance.detalles.filter(lote_creado__isnull=True)
+            logger.info(f"Encontrados {detalles_sin_lote.count()} detalles sin lote")
+            
+            # Usar una bandera para evitar recursividad y duplicación
+            if not hasattr(instance, '_lotes_creados') or not instance._lotes_creados:
+                # Marcar que ya se procesaron los lotes para esta instancia
+                instance._lotes_creados = True
                 
-                # Guardar el lote
-                lote.save()
-                
-                # Registrar el cambio de estado de maduración inicial
-                MadurationHistory.objects.create(
-                    lote=lote,
-                    estado_maduracion=lote.estado_maduracion
-                )
-                
-                # Actualizar el detalle con referencia al lote creado
-                # Usar update para evitar que se dispare la señal post_save de ReceptionDetail
-                ReceptionDetail.objects.filter(pk=detalle.pk).update(lote_creado=lote)
-                
-                # Log para debugging
-                print(f"Lote creado automáticamente: {lote} desde recepción {instance.numero_guia}")
+                for detalle in detalles_sin_lote:
+                    try:
+                        logger.info(f"Creando lote para detalle {detalle.id} - Producto: {detalle.producto.nombre if detalle.producto else 'No especificado'}")
+                        
+                        # Crear un nuevo lote de fruta basado en el detalle de recepción
+                        lote = FruitLot(
+                            producto=detalle.producto,
+                            # El tipo_producto es un atributo del producto, no del lote
+                            marca=detalle.variedad or "",  # Usar variedad como marca si está disponible
+                            proveedor=instance.proveedor.nombre if instance.proveedor else "",
+                            procedencia=instance.proveedor.direccion if instance.proveedor and instance.proveedor.direccion else "No especificada",
+                            pais="Chile",  # Valor por defecto, podría ser un campo en Proveedor
+                            calibre=detalle.calibre or "No especificado",
+                            box_type=detalle.box_type,
+                            cantidad_cajas=detalle.cantidad_cajas,
+                            peso_bruto=detalle.peso_bruto,
+                            peso_neto=detalle.peso_neto,
+                            business=instance.business,
+                            fecha_ingreso=instance.fecha_recepcion.date() if instance.fecha_recepcion else None,
+                            estado_maduracion=detalle.estado_maduracion or "verde",
+                            costo_inicial=detalle.costo,  # Usar el costo del detalle de recepción
+                            porcentaje_perdida_estimado=detalle.porcentaje_perdida_estimado,  # Usar el porcentaje de pérdida estimado del detalle
+                            # Campos de concesión
+                            en_concesion=detalle.en_concesion,
+                            comision_por_kilo=detalle.comision_por_kilo,
+                            fecha_limite_concesion=detalle.fecha_limite_concesion,
+                            # El campo propietario_original espera un objeto Supplier, no un string
+                            propietario_original=instance.proveedor if detalle.en_concesion else None,
+                        )
+                        
+                        # Guardar el lote
+                        lote.save()
+                        
+                        # Registrar el cambio de estado de maduración inicial
+                        MadurationHistory.objects.create(
+                            lote=lote,
+                            estado_maduracion=lote.estado_maduracion
+                        )
+                        
+                        # Actualizar el detalle con referencia al lote creado
+                        # Usar update para evitar que se dispare la señal post_save de ReceptionDetail
+                        ReceptionDetail.objects.filter(pk=detalle.pk).update(lote_creado=lote)
+                        
+                        # Log para debugging
+                        logger.info(f"Lote creado automáticamente: {lote} desde recepción {instance.numero_guia}")
+                    except Exception as e:
+                        logger.error(f"Error al crear lote para detalle {detalle.id}: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error general al crear lotes para recepción {instance.id}: {str(e)}")
 
 @receiver(post_save, sender=ReceptionDetail)
 def actualizar_lote_desde_detalle(sender, instance, created, **kwargs):
@@ -537,7 +601,7 @@ class SupplierPayment(BaseModel):
         help_text='Método utilizado para realizar el pago'
     )
     comprobante = models.FileField(upload_to='comprobantes_pago', null=True, blank=True, 
-                                 help_text='Archivo de comprobante de pago (opcional)')
+                                  help_text='Archivo de comprobante de pago (opcional)')
     notas = models.TextField(blank=True, null=True, help_text='Notas adicionales sobre el pago')
     business = models.ForeignKey('business.Business', on_delete=models.CASCADE)
     
@@ -554,3 +618,106 @@ class SupplierPayment(BaseModel):
         verbose_name = _("Supplier Payment")
         verbose_name_plural = _("Supplier Payments")
         ordering = ['-fecha_pago']
+
+class ConcessionSettlement(BaseModel):
+    """
+    Modelo para registrar liquidaciones de productos vendidos en concesión
+    """
+    uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
+    proveedor = models.ForeignKey('Supplier', on_delete=models.PROTECT, related_name='liquidaciones')
+    fecha_liquidacion = models.DateTimeField(default=timezone.now)
+    
+    # Totales
+    total_kilos_vendidos = models.DecimalField(max_digits=10, decimal_places=2)
+    total_ventas = models.DecimalField(max_digits=12, decimal_places=2)
+    total_comision = models.DecimalField(max_digits=12, decimal_places=2)
+    monto_a_liquidar = models.DecimalField(max_digits=12, decimal_places=2)
+    
+    # Estado
+    ESTADO_CHOICES = [
+        ('pendiente', 'Pendiente de pago'),
+        ('pagado', 'Pagado'),
+        ('cancelado', 'Cancelado'),
+    ]
+    estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default='pendiente')
+    
+    # Comprobante de pago
+    comprobante = models.FileField(upload_to='comprobantes_liquidacion', null=True, blank=True)
+    
+    # Notas
+    notas = models.TextField(blank=True, null=True)
+    business = models.ForeignKey('business.Business', on_delete=models.CASCADE)
+    
+    history = HistoricalRecords()
+    
+    def __str__(self):
+        return f"Liquidación {self.id} - {self.proveedor.nombre} - ${self.monto_a_liquidar:,.0f}"
+    
+    class Meta:
+        verbose_name = _("Concession Settlement")
+        verbose_name_plural = _("Concession Settlements")
+        ordering = ['-fecha_liquidacion']
+
+class ConcessionSettlementDetail(models.Model):
+    """
+    Detalle de ventas incluidas en una liquidación de concesión
+    """
+    liquidacion = models.ForeignKey('ConcessionSettlement', on_delete=models.CASCADE, related_name='detalles')
+    venta = models.ForeignKey('sales.Sale', on_delete=models.PROTECT)
+    item_venta = models.ForeignKey('sales.SaleItem', on_delete=models.PROTECT)
+    lote = models.ForeignKey('FruitLot', on_delete=models.PROTECT)
+    
+    cantidad_kilos = models.DecimalField(max_digits=8, decimal_places=2)
+    precio_venta = models.DecimalField(max_digits=10, decimal_places=2)
+    comision = models.DecimalField(max_digits=10, decimal_places=2)
+    monto_liquidado = models.DecimalField(max_digits=10, decimal_places=2)
+    
+    def __str__(self):
+        return f"Detalle {self.id} - Venta {self.venta.id} - {self.cantidad_kilos}kg"
+    
+    class Meta:
+        verbose_name = _("Concession Settlement Detail")
+        verbose_name_plural = _("Concession Settlement Details")
+
+class FruitBin(BaseModel):
+    uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
+    codigo = models.CharField(max_length=50, help_text="Código o identificador del bin")
+    producto = models.ForeignKey('Product', on_delete=models.PROTECT)
+    variedad = models.CharField(max_length=50, blank=True, null=True)
+    
+    # Información de peso
+    peso_bruto = models.DecimalField(max_digits=10, decimal_places=2)
+    peso_tara = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    
+    # Estado y calidad
+    ESTADO_CHOICES = [
+        ('DISPONIBLE', 'Disponible'),
+        ('EN_PROCESO', 'En Proceso de Transformación'),
+        ('TRANSFORMADO', 'Transformado a Pallets'),
+        ('DESCARTADO', 'Descartado'),
+    ]
+    estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default='DISPONIBLE')
+    calidad = models.IntegerField(choices=ReceptionDetail.CALIDAD_CHOICES, default=3)
+    
+    # Información de recepción (opcional)
+    recepcion = models.ForeignKey(GoodsReception, on_delete=models.SET_NULL, 
+                                null=True, blank=True, related_name='bins')
+    fecha_recepcion = models.DateTimeField(auto_now_add=True)
+    proveedor = models.ForeignKey('Supplier', on_delete=models.PROTECT, null=True, blank=True)
+    
+    # Campos para trazabilidad
+    temperatura = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    observaciones = models.TextField(blank=True, null=True)
+    
+    @property
+    def peso_neto(self):
+        """Calcula el peso neto restando la tara del peso bruto"""
+        return self.peso_bruto - self.peso_tara
+    
+    def __str__(self):
+        return f"Bin {self.codigo} - {self.producto.nombre} ({self.peso_bruto}kg)"
+    
+    class Meta:
+        verbose_name = "Bin de Fruta"
+        verbose_name_plural = "Bins de Fruta"
+        ordering = ['-fecha_recepcion']

@@ -9,11 +9,11 @@ class SaleAdmin(admin.ModelAdmin):
     search_fields = ('cliente__nombre', 'cliente__rut', 'id', 'codigo_venta')
     date_hierarchy = 'created_at'
     readonly_fields = ('created_at', 'updated_at', 'codigo_venta')
-    raw_id_fields = ('cliente', 'lote')
+    raw_id_fields = ('cliente',)
     
     fieldsets = (
         ('Información General', {
-            'fields': ('cliente', 'business', 'lote', 'codigo_venta', 'created_at')
+            'fields': ('cliente', 'business', 'codigo_venta', 'created_at')
         }),
         ('Detalles de Venta', {
             'fields': ('total', 'metodo_pago', 'estado_pago', 'comprobante')
@@ -34,11 +34,11 @@ class SalePendingAdmin(admin.ModelAdmin):
     search_fields = ('cliente__nombre', 'cliente__rut', 'id', 'codigo_venta')
     date_hierarchy = 'created_at'
     readonly_fields = ('created_at', 'updated_at')
-    raw_id_fields = ('cliente', 'lote')
+    raw_id_fields = ('cliente',)
     
     fieldsets = (
         ('Información General', {
-            'fields': ('cliente', 'business', 'lote', 'codigo_venta')
+            'fields': ('cliente', 'business', 'codigo_venta')
         }),
         ('Detalles', {
             'fields': ('total', 'estado', 'metodo_pago')
