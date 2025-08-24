@@ -596,7 +596,6 @@ def actualizar_lote_desde_detalle(sender, instance, created, **kwargs):
         # Eliminar la bandera
         instance._actualizando_lote = False
 
-
 class SupplierPayment(BaseModel):
     """
     Modelo para registrar pagos individuales a proveedores
@@ -700,6 +699,7 @@ class FruitBin(BaseModel):
     codigo = models.CharField(max_length=50, help_text="Código o identificador del bin")
     producto = models.ForeignKey('Product', on_delete=models.PROTECT)
     variedad = models.CharField(max_length=50, blank=True, null=True)
+    business = models.ForeignKey('business.Business', on_delete=models.CASCADE)
     
     # Información de peso
     peso_bruto = models.DecimalField(max_digits=10, decimal_places=2)
@@ -737,3 +737,6 @@ class FruitBin(BaseModel):
         verbose_name = "Bin de Fruta"
         verbose_name_plural = "Bins de Fruta"
         ordering = ['-fecha_recepcion']
+
+# Importar modelos de trazabilidad bin-lote
+from .bin_to_lot_models import BinToLotTransformation, BinToLotTransformationDetail

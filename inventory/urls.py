@@ -5,6 +5,8 @@ from .concession_views import ConcessionSettlementViewSet, ConcessionSettlementD
 from .maduracion_views import MaduracionPaltasView
 from .views_detail import FruitLotDetailViewSet
 from .product_views import ProductMovementViewSet
+from .fruit_bin_views import FruitBinViewSet, FruitBinBulkCreateView
+from .bin_to_lot_views import BinToLotTransformView
 
 router = DefaultRouter()
 router.register(r'boxtypes', BoxTypeViewSet, basename='boxtype')
@@ -19,14 +21,20 @@ router.register(r'receptiondetails', ReceptionDetailViewSet, basename='reception
 router.register(r'supplier-payments', SupplierPaymentViewSet, basename='supplierpayment')
 router.register(r'concession-settlements', ConcessionSettlementViewSet, basename='concession-settlement')
 router.register(r'concession-settlement-details', ConcessionSettlementDetailViewSet, basename='concession-settlement-detail')
+router.register(r'fruitbins', FruitBinViewSet, basename='fruitbin')
 
 # Crear instancia del ViewSet para el detalle de lote
 fruitlot_detail = FruitLotDetailViewSet.as_view({
     'get': 'get_detail',
 })
 
-# Combinar las URLs del router con las URLs basadas en clases
-urlpatterns = router.urls + [
+# Primero definimos las rutas personalizadas y luego las combinamos con las del router
+custom_urlpatterns = [
     path('maduracion-paltas/', MaduracionPaltasView.as_view(), name='maduracion-paltas'),
     path('fruits/detalle/<str:uid>/', fruitlot_detail, name='fruitlot-detail'),
+    path('fruitbins/crear_multiple/', FruitBinBulkCreateView.as_view(), name='fruitbin-crear-multiple'),
+    path('fruitbins/transformar-a-lote/', BinToLotTransformView.as_view(), name='bin-to-lot-transform'),
 ]
+
+# Combinamos las rutas personalizadas con las del router (las personalizadas tienen prioridad)
+urlpatterns = custom_urlpatterns + router.urls

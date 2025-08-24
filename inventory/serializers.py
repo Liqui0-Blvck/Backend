@@ -327,7 +327,6 @@ class SupplierSerializerList(serializers.ModelSerializer):
         else:
             return None
 
-
 class ProductSerializer(serializers.ModelSerializer):
     image_url = serializers.SerializerMethodField()
     unidad = serializers.SerializerMethodField()
@@ -437,52 +436,52 @@ class FruitLotListSerializer(serializers.ModelSerializer):
             return obj.unidades_disponibles()
 
 class FruitLotSerializer(serializers.ModelSerializer):
-    productoNombre = serializers.SerializerMethodField()
-    boxTypeNombre = serializers.SerializerMethodField()
-    palletTypeNombre = serializers.SerializerMethodField()
-    costoActual = serializers.SerializerMethodField()
-    pesoReservado = serializers.SerializerMethodField()
-    pesoDisponible = serializers.SerializerMethodField()
-    diasDesdeIngreso = serializers.SerializerMethodField()
-    dineroGenerado = serializers.SerializerMethodField()
-    porcentajeVendido = serializers.SerializerMethodField()
-    propietarioOriginalNombre = serializers.SerializerMethodField()
-    proveedorNombre = serializers.SerializerMethodField()
-    infoProducto = serializers.SerializerMethodField()
-    detallesLote = serializers.SerializerMethodField()
+    producto_nombre = serializers.SerializerMethodField()
+    box_type_nombre = serializers.SerializerMethodField()
+    pallet_type_nombre = serializers.SerializerMethodField()
+    costo_actual = serializers.SerializerMethodField()
+    peso_reservado = serializers.SerializerMethodField()
+    peso_disponible = serializers.SerializerMethodField()
+    dias_desde_ingreso = serializers.SerializerMethodField()
+    dinero_generado = serializers.SerializerMethodField()
+    porcentaje_vendido = serializers.SerializerMethodField()
+    propietario_original_nombre = serializers.SerializerMethodField()
+    proveedor_nombre = serializers.SerializerMethodField()
+    info_producto = serializers.SerializerMethodField()
+    detalles_lote = serializers.SerializerMethodField()
     
-    def get_detallesLote(self, obj):
+    def get_detalles_lote(self, obj):
         """Retorna una versión simplificada de los detalles del lote"""
         tipo_producto = self.get_tipo_producto(obj)
         
         detalles = {
             'uid': str(obj.uid),
-            'productoNombre': self.get_productoNombre(obj),
-            'tipoProducto': tipo_producto,
+            'producto_nombre': self.get_producto_nombre(obj),
+            'tipo_producto': tipo_producto,
             'calibre': obj.calibre,
-            'boxType': self.get_boxTypeNombre(obj),
-            'cantidadCajas': obj.cantidad_cajas,
-            'estadoLote': obj.estado_lote,
-            'estadoMaduracion': obj.estado_maduracion,
-            'fechaIngreso': obj.fecha_ingreso.isoformat() if obj.fecha_ingreso else None,
-            'costoInicial': float(obj.costo_inicial) if obj.costo_inicial else 0,
-            'costoActual': float(self.get_costoActual(obj)),
+            'box_type': self.get_box_type_nombre(obj),
+            'cantidad_cajas': obj.cantidad_cajas,
+            'estado_lote': obj.estado_lote,
+            'estado_maduracion': obj.estado_maduracion,
+            'fecha_ingreso': obj.fecha_ingreso.isoformat() if obj.fecha_ingreso else None,
+            'costo_inicial': float(obj.costo_inicial) if obj.costo_inicial else 0,
+            'costo_actual': float(self.get_costo_actual(obj)),
         }
         
         # Agregar campos específicos según el tipo de producto
         if tipo_producto == 'palta':
             detalles.update({
-                'pesoBruto': float(obj.peso_bruto) if obj.peso_bruto else 0,
-                'pesoNeto': float(obj.peso_neto) if obj.peso_neto else 0,
-                'pesoDisponible': float(self.get_kg_disponibles(obj)),
-                'pesoReservado': float(self.get_pesoReservado(obj)),
+                'peso_bruto': float(obj.peso_bruto) if obj.peso_bruto else 0,
+                'peso_neto': float(obj.peso_neto) if obj.peso_neto else 0,
+                'peso_disponible': float(self.get_kg_disponibles(obj)),
+                'peso_reservado': float(self.get_peso_reservado(obj)),
             })
         elif tipo_producto == 'otro':
             detalles.update({
-                'cantidadUnidades': obj.cantidad_unidades,
-                'unidadesPorCaja': obj.unidades_por_caja,
-                'unidadesDisponibles': self.get_unidades_disponibles(obj),
-                'unidadesReservadas': obj.unidades_reservadas,
+                'cantidad_unidades': obj.cantidad_unidades,
+                'unidades_por_caja': obj.unidades_por_caja,
+                'unidades_disponibles': self.get_unidades_disponibles(obj),
+                'unidades_reservadas': obj.unidades_reservadas,
             })
             
         return detalles
@@ -500,16 +499,16 @@ class FruitLotSerializer(serializers.ModelSerializer):
             'estado_lote', 'estado_maduracion', 'en_concesion', 'comision_por_kilo', 'fecha_limite_concesion',
             'propietario_original', 
             # SerializerMethodFields
-            'productoNombre', 'boxTypeNombre', 'palletTypeNombre', 'costoActual', 'proveedorNombre',
-            'diasDesdeIngreso', 'dineroGenerado', 'porcentajeVendido', 'propietarioOriginalNombre',
-            'infoProducto', 'cajas_disponibles', 'kg_disponibles', 'pesoDisponible', 'pesoReservado', 
-            'unidades_disponibles', 'detallesLote'
+            'producto_nombre', 'box_type_nombre', 'pallet_type_nombre', 'costo_actual', 'proveedor_nombre',
+            'dias_desde_ingreso', 'dinero_generado', 'porcentaje_vendido', 'propietario_original_nombre',
+            'info_producto', 'cajas_disponibles', 'kg_disponibles', 'peso_disponible', 'peso_reservado', 
+            'unidades_disponibles', 'detalles_lote'
         )
 
     def get_proveedor_nombre(self, obj):
         return obj.proveedor
 
-    def get_diasDesdeIngreso(self, obj):
+    def get_dias_desde_ingreso(self, obj):
         from django.utils import timezone
         if obj.fecha_ingreso:
             return (timezone.now().date() - obj.fecha_ingreso).days
@@ -520,7 +519,7 @@ class FruitLotSerializer(serializers.ModelSerializer):
             return obj.producto.tipo_producto
         return None
 
-    def get_infoProducto(self, obj):
+    def get_info_producto(self, obj):
         """
         Proporciona información detallada y estructurada según el tipo de producto
         """
@@ -529,11 +528,11 @@ class FruitLotSerializer(serializers.ModelSerializer):
         # Información común para todos los tipos de producto
         info = {
             'tipo': tipo,
-            'nombre': self.get_productoNombre(obj),
+            'nombre': self.get_producto_nombre(obj),
             'estado_lote': obj.estado_lote,
-            'dias_desde_ingreso': self.get_diasDesdeIngreso(obj),
+            'dias_desde_ingreso': self.get_dias_desde_ingreso(obj),
             'costo_inicial': float(obj.costo_inicial) if obj.costo_inicial else 0,
-            'costo_actual': float(self.get_costoActual(obj)),
+            'costo_actual': float(self.get_costo_actual(obj)),
             'en_concesion': obj.en_concesion,
         }
         
@@ -606,32 +605,32 @@ class FruitLotSerializer(serializers.ModelSerializer):
         
         return info
 
-    def get_productoNombre(self, obj):
+    def get_producto_nombre(self, obj):
         if obj.producto:
             return obj.producto.nombre
         return None
 
-    def get_boxTypeNombre(self, obj):
+    def get_box_type_nombre(self, obj):
         if obj.box_type:
             return obj.box_type.nombre
         return None
 
-    def get_palletTypeNombre(self, obj):
+    def get_pallet_type_nombre(self, obj):
         if obj.pallet_type:
             return obj.pallet_type.nombre
         return None
 
-    def get_costoActual(self, obj):
+    def get_costo_actual(self, obj):
         return obj.costo_actualizado()
 
-    def get_pesoReservado(self, obj):
+    def get_peso_reservado(self, obj):
         from inventory.models import StockReservation
         reservas = StockReservation.objects.filter(lote=obj, estado='en_proceso').aggregate(total_kg=Sum('kg_reservados'))
         return reservas['total_kg'] or 0
 
-    def get_pesoDisponible(self, obj):
+    def get_peso_disponible(self, obj):
         neto = float(obj.peso_neto or 0)
-        reservado = self.get_pesoReservado(obj)
+        reservado = self.get_peso_reservado(obj)
         return neto - reservado if neto > reservado else 0
 
     def get_tipo_producto(self, obj):
@@ -639,14 +638,14 @@ class FruitLotSerializer(serializers.ModelSerializer):
             return 'otro'
         return obj.producto.tipo_producto
 
-    def get_diasDesdeIngreso(self, obj):
+    def get_dias_desde_ingreso(self, obj):
         from django.utils import timezone
         if obj.fecha_ingreso:
             return (timezone.now().date() - obj.fecha_ingreso).days
         return 0
 
     def get_dias_en_bodega(self, obj):
-        return self.get_diasDesdeIngreso(obj)
+        return self.get_dias_desde_ingreso(obj)
 
     def get_porcentaje_perdida(self, obj):
         tipo = self.get_tipo_producto(obj)
@@ -763,14 +762,14 @@ class FruitLotSerializer(serializers.ModelSerializer):
         total_vendido = SaleItem.objects.filter(lote=obj).aggregate(total=Sum('peso_vendido'))['total'] or 0
         return float(total_vendido)
     
-    def get_dineroGenerado(self, obj):
+    def get_dinero_generado(self, obj):
         # Importar Sale aquí para evitar importaciones circulares
         from sales.models import SaleItem
         # Usar el ID del lote en lugar de la relación directa
         total_dinero = SaleItem.objects.filter(lote=obj).aggregate(total=Sum('subtotal'))['total'] or 0
         return float(total_dinero)
     
-    def get_porcentajeVendido(self, obj):
+    def get_porcentaje_vendido(self, obj):
         """Calcula el porcentaje del lote que ya ha sido vendido"""
         if obj.peso_neto <= 0:
             return 0
@@ -779,7 +778,7 @@ class FruitLotSerializer(serializers.ModelSerializer):
         from decimal import Decimal
         return round((Decimal(str(peso_vendido)) / obj.peso_neto) * 100, 2)
         
-    def get_propietarioOriginalNombre(self, obj):
+    def get_propietario_original_nombre(self, obj):
         """Obtiene el nombre del propietario original para lotes en concesión"""
         if obj.en_concesion and obj.propietario_original:
             return obj.propietario_original.nombre
@@ -854,10 +853,10 @@ class StockReservationSerializer(serializers.ModelSerializer):
 class ReceptionDetailSerializer(serializers.ModelSerializer):
     recepcion = serializers.SlugRelatedField(queryset=GoodsReception.objects.all(), slug_field='uid')
     producto = serializers.SlugRelatedField(queryset=Product.objects.all(), slug_field='uid')
-    productoNombre = serializers.SerializerMethodField()
+    producto_nombre = serializers.SerializerMethodField()
     box_type = serializers.SlugRelatedField(queryset=BoxType.objects.all(), slug_field='uid', required=False, allow_null=True)
     
-    def get_productoNombre(self, obj):
+    def get_producto_nombre(self, obj):
         if obj.producto:
             return obj.producto.nombre
         return None
@@ -865,7 +864,7 @@ class ReceptionDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = ReceptionDetail
         fields = (
-            'uid', 'recepcion', 'producto', 'productoNombre', 'variedad', 'calibre', 'box_type', 'numero_pallet', 'cantidad_cajas', 'peso_bruto',
+            'uid', 'recepcion', 'producto', 'producto_nombre', 'variedad', 'calibre', 'box_type', 'numero_pallet', 'cantidad_cajas', 'peso_bruto',
             'peso_tara', 'calidad', 'temperatura', 'estado_maduracion',
             'costo', 'porcentaje_perdida_estimado'
         )
@@ -882,46 +881,65 @@ class SupplierRelatedField(serializers.PrimaryKeyRelatedField):
 
 class GoodsReceptionListSerializer(serializers.ModelSerializer):
     """Serializer simplificado para listas de recepciones"""
-    proveedorNombre = serializers.SerializerMethodField()
-    recibidoPorNombre = serializers.SerializerMethodField()
+    proveedor_nombre = serializers.SerializerMethodField()
+    recibido_por_nombre = serializers.SerializerMethodField()
     
     class Meta:
         model = GoodsReception
         fields = (
-            'uid', 'numero_guia', 'fecha_recepcion', 'proveedorNombre', 'numero_guia_proveedor',
-            'recibidoPorNombre', 'total_pallets', 'total_cajas', 'estado', 'estado_pago'
+            'uid', 'numero_guia', 'fecha_recepcion', 'proveedor_nombre', 'numero_guia_proveedor',
+            'recibido_por_nombre', 'total_pallets', 'total_cajas', 'estado', 'estado_pago'
         )
     
-    def get_proveedorNombre(self, obj):
+    def get_proveedor_nombre(self, obj):
         return obj.proveedor.nombre if obj.proveedor else None
         
-    def get_recibidoPorNombre(self, obj):
+    def get_recibido_por_nombre(self, obj):
         if obj.recibido_por:
             return f"{obj.recibido_por.first_name} {obj.recibido_por.last_name}".strip()
         return None
 
 class GoodsReceptionSerializer(serializers.ModelSerializer):
     proveedor = SupplierRelatedField(queryset=Supplier.objects.all())
-    detallesSimplificados = serializers.SerializerMethodField()
-    detalles = ReceptionDetailSerializer(many=True, required=False, write_only=True)
-    recibidoPorNombre = serializers.SerializerMethodField()
-    revisadoPorNombre = serializers.SerializerMethodField()
-    # Añadir el objeto completo del proveedor
-    proveedorInfo = SupplierSerializer(source='proveedor', read_only=True)
+    detalles = serializers.SerializerMethodField()
+    # detalles_data = ReceptionDetailSerializer(source='detalles', many=True, required=False, write_only=True)
+    recibido_por_nombre = serializers.SerializerMethodField()
+    revisado_por_nombre = serializers.SerializerMethodField()
+    # Información básica del proveedor
+    proveedor_info = serializers.SerializerMethodField()
 
-    def get_detallesSimplificados(self, obj):
-        """Retorna una versión simplificada de los detalles de recepción"""
+    def get_detalles(self, obj):
+        """Retorna una versión simplificada de los detalles de recepción sin duplicados"""
         detalles = []
+        pallets_procesados = set()  # Conjunto para rastrear pallets ya procesados
+        
         for detalle in obj.detalles.all():
-            detalles.append({
-                'numeroPallet': detalle.numero_pallet,
-                'calibre': detalle.calibre,
-                'cantidadCajas': detalle.cantidad_cajas,
-                'costo': detalle.costo,
-                'productoNombre': detalle.producto.nombre if detalle.producto else 'No especificado',
-                'calidad': detalle.get_calidad_display()
-            })
+            # Verificar si este número de pallet ya fue procesado
+            if detalle.numero_pallet not in pallets_procesados:
+                pallets_procesados.add(detalle.numero_pallet)  # Marcar como procesado
+                
+                detalles.append({
+                    'numero_pallet': detalle.numero_pallet,
+                    'calibre': detalle.calibre,
+                    'cantidad_cajas': detalle.cantidad_cajas,
+                    'costo': detalle.costo,
+                    'producto_nombre': detalle.producto.nombre if detalle.producto else 'No especificado',
+                    'calidad': detalle.get_calidad_display()
+                })
         return detalles
+        
+    def get_proveedor_info(self, obj):
+        """Retorna información básica del proveedor"""
+        if obj.proveedor:
+            return {
+                'uid': obj.proveedor.uid,
+                'nombre': obj.proveedor.nombre,
+                'rut': obj.proveedor.rut,
+                'telefono': obj.proveedor.telefono,
+                'email': obj.proveedor.email
+            }
+        return None
+    
     def to_internal_value(self, data):
         import json
         detalles = data.get('detalles')
@@ -945,9 +963,9 @@ class GoodsReceptionSerializer(serializers.ModelSerializer):
     class Meta:
         model = GoodsReception
         fields = (
-            'uid', 'numero_guia', 'fecha_recepcion', 'proveedor', 'proveedorInfo', 'numero_guia_proveedor', 'recibido_por',
-            'revisado_por', 'recibidoPorNombre', 'revisadoPorNombre', 'estado', 'observaciones', 'estado_pago', 
-            'total_pallets', 'total_cajas', 'total_peso_bruto', 'business', 'detalles', 'detallesSimplificados',
+            'uid', 'numero_guia', 'fecha_recepcion', 'proveedor', 'proveedor_info', 'numero_guia_proveedor', 'recibido_por',
+            'revisado_por', 'recibido_por_nombre', 'revisado_por_nombre', 'estado', 'observaciones', 'estado_pago', 
+            'total_pallets', 'total_cajas', 'total_peso_bruto', 'business', 'detalles',
             'en_concesion', 'comision_por_kilo', 'fecha_limite_concesion',
         )
         # Excluir IDs que no se utilizan de la respuesta (solo para escritura)
@@ -957,12 +975,12 @@ class GoodsReceptionSerializer(serializers.ModelSerializer):
             'business': {'write_only': True}
         }
         
-    def get_recibidoPorNombre(self, obj):
+    def get_recibido_por_nombre(self, obj):
         if obj.recibido_por:
             return f"{obj.recibido_por.first_name} {obj.recibido_por.last_name}".strip()
         return None
         
-    def get_revisadoPorNombre(self, obj):
+    def get_revisado_por_nombre(self, obj):
         if obj.revisado_por:
             return f"{obj.revisado_por.first_name} {obj.revisado_por.last_name}".strip()
         return None
