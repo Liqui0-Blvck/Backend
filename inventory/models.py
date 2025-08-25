@@ -724,6 +724,8 @@ class FruitBin(BaseModel):
     # Campos para trazabilidad
     temperatura = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     observaciones = models.TextField(blank=True, null=True)
+
+    historial = HistoricalRecords()
     
     @property
     def peso_neto(self):

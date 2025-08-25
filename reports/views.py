@@ -120,7 +120,8 @@ class ReportSummaryView(APIView):
             # Calcular reservas
             reservas_producto = 0
             for lote in lotes_producto:
-                reservas_producto += reservas_dict.get(lote.uid, 0) or 0
+                # reservas_dict está indexado por ID de lote (values('lote')), no por UID
+                reservas_producto += reservas_dict.get(lote.id, 0) or 0
             
             disponible = peso_total - reservas_producto
             
@@ -327,7 +328,7 @@ class StockReportView(APIView):
         reservas = StockReservation.objects.filter(
             lote__business=business
         ).values('lote').annotate(
-            total_reservado=Sum('cantidad_kg')
+            total_reservado=Sum('kg_reservados')
         )
         
         # Crear un diccionario para acceso rápido
@@ -337,7 +338,7 @@ class StockReportView(APIView):
         resultados = []
         for lote in queryset:
             # Calcular peso disponible (peso neto - reservado)
-            reservado = float(reservas_dict.get(lote.uid, 0) or 0)
+            reservado = float(reservas_dict.get(lote.id, 0) or 0)
             disponible = float(lote.peso_neto) - reservado if lote.peso_neto else 0
             
             # Detectar tipo de producto
@@ -368,7 +369,8 @@ class StockReportView(APIView):
                 lote_data['estado_maduracion'] = lote.estado_maduracion
 
             # Cálculos manuales y agregados (mantén toda la lógica original)
-            reservado = float(reservas_dict.get(lote_data['uid'], 0) or 0)
+            # reservas_dict está indexado por ID de lote (values('lote'))
+            reservado = float(reservas_dict.get(lote.id, 0) or 0)
             disponible = float(lote_data.get('peso_neto', 0) or 0) - reservado if lote_data.get('peso_neto') else 0
 
             # Detectar tipo de producto

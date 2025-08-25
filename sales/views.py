@@ -40,6 +40,7 @@ class SalePendingViewSet(viewsets.ModelViewSet):
     serializer_class = SalePendingSerializer
     permission_classes = [IsAuthenticated]
     http_method_names = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']
+    ordering_fields = ['-created_at']
     lookup_field = 'uid'
     
 
@@ -109,6 +110,7 @@ class CustomerPaymentViewSet(viewsets.ModelViewSet):
     serializer_class = CustomerPaymentSerializer
     permission_classes = [IsAuthenticated, IsSameBusiness]
     lookup_field = 'uid'
+    ordering_fields = ['-created_at']
     queryset = CustomerPayment.objects.all()
 
     def get_queryset(self):
@@ -153,6 +155,7 @@ class CustomerPaymentViewSet(viewsets.ModelViewSet):
 class SaleViewSet(viewsets.ModelViewSet):
     serializer_class = SaleSerializer
     permission_classes = [IsAuthenticated, IsSameBusiness]
+    ordering_fields = ['-created_at']
     lookup_field = 'uid'
 
     def get_serializer_class(self):
@@ -170,6 +173,37 @@ class SaleViewSet(viewsets.ModelViewSet):
         clientes = Customer.objects.filter(business=perfil.business)
         serializer = CustomerSerializer(clientes, many=True)
         return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'], url_path='last-code')
+    def last_code(self, request):
+        """Devuelve el último codigo_venta del día actual y el próximo sugerido para el negocio del usuario"""
+        perfil = getattr(request.user, 'perfil', None)
+        if perfil is None:
+            return Response({"detail": "Usuario sin perfil"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        today = datetime.now().strftime('%Y%m%d')
+        prefix = f'VEN-{today}-'
+        # Buscar la última venta del día por codigo_venta para el negocio actual
+        last_sale = (
+            Sale.objects
+            .filter(business=perfil.business, codigo_venta__startswith=prefix)
+            .order_by('-codigo_venta')
+            .first()
+        )
+        if last_sale and last_sale.codigo_venta:
+            try:
+                last_number = int(last_sale.codigo_venta.split('-')[-1])
+            except Exception:
+                last_number = 0
+            last_code = last_sale.codigo_venta
+        else:
+            last_number = 0
+            last_code = None
+        next_code = f"{prefix}{last_number + 1:05d}"
+        return Response({
+            'last_codigo_venta': last_code,
+            'next_codigo_venta': next_code
+        })
     
     @action(detail=True, methods=['post'])
     def cancelar(self, request, uid=None):

@@ -55,17 +55,22 @@ class BinToLotTransformationDetail(models.Model):
         related_name='transformaciones'
     )
     
-    # Peso del bin al momento de la transformación
-    peso_bruto = models.DecimalField(max_digits=10, decimal_places=2)
-    peso_tara = models.DecimalField(max_digits=10, decimal_places=2)
+    # Peso del bin al momento de la transformación (snapshot previo)
+    peso_bruto_previo = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    peso_tara_previa = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    # Kilos netos descontados de este bin en esta transformación
+    kg_descontados = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     
     def __str__(self):
-        return f"Detalle {self.id} - Bin {self.bin.codigo}"
+        return f"Detalle {self.id} - Bin {self.bin.codigo} (-{self.kg_descontados} kg)"
     
     @property
     def peso_neto(self):
         """Calcula el peso neto del bin"""
-        return self.peso_bruto - self.peso_tara
+        if self.peso_bruto_previo is None or self.peso_tara_previa is None:
+            from decimal import Decimal
+            return Decimal('0.00')
+        return self.peso_bruto_previo - self.peso_tara_previa
     
     class Meta:
         verbose_name = "Detalle de Transformación"
