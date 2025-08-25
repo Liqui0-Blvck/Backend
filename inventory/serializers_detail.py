@@ -323,54 +323,62 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
 
     def get_ingreso_estimado(self, obj):
         """
-        Calcula el ingreso estimado basado en los valores iniciales del pallet
-        obtenidos del historial.
+        Calcula el ingreso estimado diferenciando por tipo de producto.
+        - Palta: por kilos (usa peso disponible menos pérdida estimada y precio por kg).
+        - Otros: por caja (usa cantidad de cajas y precio por caja).
         """
-        try:
-            # Obtenemos el primer registro del historial
-            historial = obj.history.all().order_by('history_date')
-            if historial.exists():
-                primer_registro = historial.first()
-                peso_inicial = float(getattr(primer_registro, 'peso_neto', 0) or 0)
-                
-                # Calculamos el precio recomendado basado en el costo inicial
-                costo_inicial = float(getattr(primer_registro, 'costo_inicial', 0) or 0)
-                precio_recomendado = round(costo_inicial * 1.3, 2)  # 30% de margen
-                
-                return round(precio_recomendado * peso_inicial, 2)
-        except Exception:
-            pass
-            
-        # Si no hay historial, usamos el método anterior como fallback
-        peso_real = self.get_peso_vendible(obj)
-        return round(self.get_precio_recomendado_kg(obj) * peso_real, 2)
+        tipo = self.get_tipo_producto(obj)
+        # Palta por kilos
+        if tipo == 'palta':
+            try:
+                historial = obj.history.all().order_by('history_date')
+                if historial.exists():
+                    # Mantener como referencia inicial si hay historial
+                    primer_registro = historial.first()
+                    peso_inicial = float(getattr(primer_registro, 'peso_neto', 0) or 0)
+                    costo_inicial = float(getattr(primer_registro, 'costo_inicial', 0) or 0)
+                    precio_recomendado = round(costo_inicial * 1.3, 2)
+                    return round(precio_recomendado * peso_inicial, 2)
+            except Exception:
+                pass
+            # Cálculo con valores actuales
+            peso_real = self.get_peso_vendible(obj)
+            return round(self.get_precio_recomendado_kg(obj) * peso_real, 2)
+        
+        # Otros productos por caja
+        cantidad_cajas = float(obj.cantidad_cajas or 0)
+        costo_por_caja = float(obj.costo_inicial or 0)
+        precio_recomendado_caja = round(costo_por_caja * 1.3, 2)
+        return round(precio_recomendado_caja * cantidad_cajas, 2)
 
     def get_ganancia_total(self, obj):
         """
-        Calcula la ganancia total estimada basada en los valores iniciales del pallet
-        obtenidos del historial.
+        Calcula la ganancia total estimada diferenciando por tipo de producto.
+        - Palta: por kilos.
+        - Otros: por caja.
         """
-        try:
-            # Obtenemos el primer registro del historial
-            historial = obj.history.all().order_by('history_date')
-            if historial.exists():
-                primer_registro = historial.first()
-                peso_inicial = float(getattr(primer_registro, 'peso_neto', 0) or 0)
-                
-                # Calculamos el costo y precio iniciales
-                costo_inicial = float(getattr(primer_registro, 'costo_inicial', 0) or 0)
-                precio_recomendado = round(costo_inicial * 1.3, 2)  # 30% de margen
-                
-                # Ganancia por kg
-                ganancia_kg = precio_recomendado - costo_inicial
-                
-                return round(ganancia_kg * peso_inicial, 2)
-        except Exception:
-            pass
-            
-        # Si no hay historial, usamos el método anterior como fallback
-        peso_real = self.get_peso_vendible(obj)
-        return round(self.get_ganancia_kg(obj) * peso_real, 2)
+        tipo = self.get_tipo_producto(obj)
+        if tipo == 'palta':
+            try:
+                historial = obj.history.all().order_by('history_date')
+                if historial.exists():
+                    primer_registro = historial.first()
+                    peso_inicial = float(getattr(primer_registro, 'peso_neto', 0) or 0)
+                    costo_inicial = float(getattr(primer_registro, 'costo_inicial', 0) or 0)
+                    precio_recomendado = round(costo_inicial * 1.3, 2)
+                    ganancia_kg = precio_recomendado - costo_inicial
+                    return round(ganancia_kg * peso_inicial, 2)
+            except Exception:
+                pass
+            peso_real = self.get_peso_vendible(obj)
+            return round(self.get_ganancia_kg(obj) * peso_real, 2)
+        
+        # Otros productos por caja
+        cantidad_cajas = float(obj.cantidad_cajas or 0)
+        costo_por_caja = float(obj.costo_inicial or 0)
+        precio_recomendado_caja = round(costo_por_caja * 1.3, 2)
+        ganancia_por_caja = precio_recomendado_caja - costo_por_caja
+        return round(ganancia_por_caja * cantidad_cajas, 2)
 
     def get_urgencia_venta(self, obj):
         estado = getattr(obj, 'estado_maduracion', 'verde')
@@ -391,7 +399,7 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
             }
         elif estado == 'pre-maduro':
             return {
-                'accion': 'preparar_venta',
+                'accion': 'preparar venta',
                 'mensaje': 'Preparar para venta en 2 días.',
                 'precio_sugerido': precio
             }
