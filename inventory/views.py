@@ -5,7 +5,7 @@ from .models import BoxType, FruitLot, StockReservation, Product, GoodsReception
 from .serializers import BoxTypeSerializer, FruitLotSerializer, FruitLotListSerializer, StockReservationSerializer, ProductSerializer, GoodsReceptionSerializer, GoodsReceptionListSerializer, ReceptionDetailSerializer, SupplierPaymentSerializer, ConcessionSettlementSerializer, ConcessionSettlementDetailSerializer, PalletHistorySerializerList, PalletHistoryDetailSerializer
 from .serializers_supplier import SupplierSerializerList, SupplierSerializer
 from rest_framework.permissions import IsAuthenticated
-from core.permissions import IsSameBusiness
+from core.permissions import IsSameBusiness, IsProveedorReadOnly
 from accounts.models import CustomUser
 from sales.models import SalePendingItem
 from rest_framework.response import Response
@@ -20,8 +20,12 @@ class RolePermissionMixin:
     def get_permissions(self):
         user = self.request.user
         perms = super().get_permissions()
-        # Puedes agregar lógica granular aquí por rol
-        # Ejemplo: solo admin/supervisor pueden modificar, vendedores solo crear, visualizadores solo leer
+        # Si es Proveedor, forzar solo lectura
+        try:
+            if user and user.is_authenticated and user.groups.filter(name='Proveedor').exists():
+                perms.append(IsProveedorReadOnly())
+        except Exception:
+            pass
         return perms
 
     def get_queryset(self):
@@ -32,6 +36,32 @@ class RolePermissionMixin:
         if perfil is None:
             return qs.none()
             
+        # Proveedor: solo datos propios del proveedor asociado, solo lectura (enforced in permission)
+        if user.groups.filter(name='Proveedor').exists():
+            proveedor = getattr(perfil, 'proveedor', None)
+            if not proveedor:
+                return qs.none()
+            model = getattr(qs, 'model', None)
+            try:
+                if model.__name__ == 'Supplier':
+                    return qs.filter(pk=getattr(proveedor, 'pk', None))
+                if model.__name__ == 'GoodsReception':
+                    return qs.filter(proveedor=proveedor)
+                if model.__name__ == 'ReceptionDetail':
+                    return qs.filter(recepcion__proveedor=proveedor)
+                if model.__name__ == 'FruitLot':
+                    return qs.filter(Q(proveedor=proveedor) | Q(propietario_original=proveedor))
+                if model.__name__ == 'SupplierPayment':
+                    return qs.filter(recepcion__proveedor=proveedor)
+                if model.__name__ == 'ConcessionSettlement':
+                    return qs.filter(proveedor=proveedor)
+                if model.__name__ == 'ConcessionSettlementDetail':
+                    return qs.filter(liquidacion__proveedor=proveedor)
+            except Exception:
+                return qs.none()
+            # Si no está mapeado, no exponer datos
+            return qs.none()
+
         # Visualizador solo puede ver, vendedor solo los de su empresa, admin/supervisor todo
         if user.groups.filter(name='Visualizador').exists():
             return qs.filter(business=perfil.business)

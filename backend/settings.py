@@ -33,7 +33,7 @@ ALLOWED_HOSTS = [
     '0.0.0.0',
     'fruitpos.com',
     'www.fruitpos.com',
-    'fruitpos.cl'
+    'fruitpos.cl',
     'localhost:5173',
     '127.0.0.1:5173',
 ]
@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'django_filters',
+    'simple_history',
     
     # Cors
     'corsheaders',

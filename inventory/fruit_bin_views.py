@@ -4,7 +4,14 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from django_filters.rest_framework import DjangoFilterBackend, FilterSet, NumberFilter, ChoiceFilter, CharFilter
+from django_filters.rest_framework import (
+    DjangoFilterBackend,
+    FilterSet,
+    NumberFilter,
+    ChoiceFilter,
+    CharFilter,
+    MultipleChoiceFilter,
+)
 from .models import FruitBin
 from .fruit_bin_serializers import FruitBinListSerializer, FruitBinDetailSerializer, FruitBinBulkCreateSerializer
 from core.permissions import IsSameBusiness
@@ -15,7 +22,7 @@ class FruitBinFilter(FilterSet):
     """Filtros personalizados para FruitBin"""
     peso_neto_min = NumberFilter(method='filter_peso_neto_min', label='Peso neto mínimo')
     peso_neto_max = NumberFilter(method='filter_peso_neto_max', label='Peso neto máximo')
-    estado = ChoiceFilter(choices=FruitBin.ESTADO_CHOICES)
+    estado = CharFilter(method='filter_estado', label='Estados')
     producto = CharFilter(method='filter_producto', label='Producto (ID o nombre)')
     calidad = NumberFilter(field_name='calidad', label='Calidad (1-5)')
     
@@ -38,6 +45,25 @@ class FruitBinFilter(FilterSet):
                     filtered_bins.append(bin.pk)
             return queryset.filter(pk__in=filtered_bins)
         return queryset
+
+    def filter_estado(self, queryset, name, value):
+        """Permite filtrar por múltiples estados.
+        Acepta formatos:
+        - Repetido: ?estado=DISPONIBLE&estado=EN_PROCESO
+        - Comas: ?estado=DISPONIBLE,EN_PROCESO
+        - Arreglo (algunos clientes): ?estado[]=DISPONIBLE&estado[]=EN_PROCESO
+        """
+        # Recolectar múltiples valores del querystring
+        request = getattr(self, 'request', None)
+        estados = []
+        if request:
+            estados = request.GET.getlist('estado') or request.GET.getlist('estado[]')
+        # Si vino como cadena separada por comas
+        if not estados and value:
+            estados = [v.strip() for v in str(value).split(',') if v.strip()]
+        if not estados:
+            return queryset
+        return queryset.filter(estado__in=estados)
     
     def filter_producto(self, queryset, name, value):
         """Filtra bins por producto, aceptando tanto ID como nombre"""

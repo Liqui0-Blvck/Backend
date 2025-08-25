@@ -8,22 +8,49 @@ from django.utils import timezone
 from django.db.models import Sum, Count, F, Q, DecimalField, FloatField, ExpressionWrapper
 from django.db.models.functions import TruncDate, TruncMonth, TruncWeek, Coalesce
 from django.utils.dateparse import parse_date
+from accounts.models import Perfil
 
 # Importaciones de modelos
-from sales.models import Sale
+from sales.models import Sale, SaleItem, SalePendingItem
 from inventory.models import FruitLot, StockReservation, Product
 from shifts.models import Shift
 
 # Importaciones de utilidades
 from scripts.maduration_pricing import calculate_maduration_price
 
+def _get_business_from_user(user):
+    """Obtiene el negocio desde el usuario o su perfil de forma segura."""
+    # Acceso directo
+    if hasattr(user, 'business') and user.business:
+        return user.business
+    # Perfil relacionado
+    perfil = getattr(user, 'perfil', None)
+    if perfil and getattr(perfil, 'business', None):
+        return perfil.business
+    # Lookup explícito por si la relación no está en cache
+    try:
+        perfil = Perfil.objects.get(user=user)
+        return getattr(perfil, 'business', None)
+    except Perfil.DoesNotExist:
+        return None
+
+
 class ReportSummaryView(APIView):
     permission_classes = [IsAuthenticated, IsSameBusiness]
     def get(self, request):
         user = request.user
-        perfil = getattr(user, 'perfil', None)
-        if perfil is None:
-            return Response({'detail': 'Perfil no encontrado.'}, status=404)
+        business = _get_business_from_user(request.user)
+        if not business:
+            return Response({'detail': 'Usuario no tiene un negocio asociado.'}, status=404)
+        
+        # Determinar si es proveedor y obtener su proveedor vinculado
+        is_proveedor = request.user.groups.filter(name='Proveedor').exists()
+        proveedor = None
+        if is_proveedor:
+            perfil = getattr(user, 'perfil', None)
+            proveedor = getattr(perfil, 'proveedor', None) if perfil else None
+            if not proveedor:
+                return Response({'detail': 'Proveedor no vinculado al usuario.'}, status=404)
         
         # Resumen por períodos (hoy, esta semana, este mes, total)
         
@@ -37,62 +64,77 @@ class ReportSummaryView(APIView):
         rango_semana = (datetime.combine(inicio_semana, time.min), datetime.combine(hoy, time.max))
         rango_mes = (datetime.combine(inicio_mes, time.min), datetime.combine(hoy, time.max))
         
-        # Obtener datos de ventas
-        
+        # Helper para calcular métricas por período considerando ambos tipos de productos
+        def calcular_metricas(qs_ventas):
+            total_ventas = qs_ventas.count()
+            ingresos = qs_ventas.aggregate(total=Sum('total'))['total'] or 0
+            # Paltas por kg
+            kg_paltas = SaleItem.objects.filter(
+                venta__in=qs_ventas,
+                lote__producto__tipo_producto='palta'
+            ).aggregate(total=Sum('peso_vendido'))['total'] or 0
+            # Otros por unidades
+            unidades_otros = SaleItem.objects.filter(
+                venta__in=qs_ventas,
+                lote__producto__tipo_producto='otro'
+            ).aggregate(total=Sum('unidades_vendidas'))['total'] or 0
+            return {
+                'total_ventas': total_ventas,
+                'total_ingresos': ingresos,
+                # Backward-compatible keys
+                'total_kg': kg_paltas,
+                'total_cajas': unidades_otros,
+                # Detailed keys
+                'total_kg_paltas': kg_paltas,
+                'total_unidades_otros': unidades_otros,
+            }
+
+        # Helper para aplicar filtro por proveedor a ventas
+        def ventas_filtradas_por_proveedor(qs):
+            if not is_proveedor:
+                return qs
+            return qs.filter(
+                Q(items__lote__proveedor=proveedor) |
+                Q(items__proveedor_original=proveedor) |
+                Q(items__lote__propietario_original=proveedor)
+            ).distinct()
+
         # Ventas de hoy
-        ventas_hoy = Sale.objects.filter(
-            business=perfil.business,
-            created_at__range=rango_hoy
+        ventas_hoy = ventas_filtradas_por_proveedor(
+            Sale.objects.filter(business=business, cancelada=False, created_at__range=rango_hoy)
         )
-        
-        total_ventas_hoy = ventas_hoy.count()
-        total_kg_hoy = ventas_hoy.annotate(peso_total=Sum('items__peso_vendido')).aggregate(total=Sum('peso_total'))['total'] or 0
-        total_ingresos_hoy = ventas_hoy.annotate(
-            subtotal=Sum(F('items__peso_vendido') * F('items__precio_kg'), output_field=DecimalField())
-        ).aggregate(total=Sum('subtotal'))['total'] or 0
-        
+        m_hoy = calcular_metricas(ventas_hoy)
+
         # Ventas de esta semana
-        ventas_semana = Sale.objects.filter(
-            business=perfil.business,
-            created_at__range=rango_semana
+        ventas_semana = ventas_filtradas_por_proveedor(
+            Sale.objects.filter(business=business, cancelada=False, created_at__range=rango_semana)
         )
-        
-        total_ventas_semana = ventas_semana.count()
-        total_kg_semana = ventas_semana.annotate(peso_total=Sum('items__peso_vendido')).aggregate(total=Sum('peso_total'))['total'] or 0
-        total_ingresos_semana = ventas_semana.annotate(
-            subtotal=Sum(F('items__peso_vendido') * F('items__precio_kg'), output_field=DecimalField())
-        ).aggregate(total=Sum('subtotal'))['total'] or 0
-        
+        m_semana = calcular_metricas(ventas_semana)
+
         # Ventas de este mes
-        ventas_mes = Sale.objects.filter(
-            business=perfil.business,
-            created_at__range=rango_mes
+        ventas_mes = ventas_filtradas_por_proveedor(
+            Sale.objects.filter(business=business, cancelada=False, created_at__range=rango_mes)
         )
-        
-        total_ventas_mes = ventas_mes.count()
-        total_kg_mes = ventas_mes.annotate(peso_total=Sum('items__peso_vendido')).aggregate(total=Sum('peso_total'))['total'] or 0
-        total_ingresos_mes = ventas_mes.annotate(
-            subtotal=Sum(F('items__peso_vendido') * F('items__precio_kg'), output_field=DecimalField())
-        ).aggregate(total=Sum('subtotal'))['total'] or 0
-        
+        m_mes = calcular_metricas(ventas_mes)
+
         # Total histórico
-        ventas_total = Sale.objects.filter(business=perfil.business)
-        total_ventas_historico = ventas_total.count()
-        total_kg_historico = ventas_total.annotate(peso_total=Sum('items__peso_vendido')).aggregate(total=Sum('peso_total'))['total'] or 0
-        total_ingresos_historico = ventas_total.annotate(
-            subtotal=Sum(F('items__peso_vendido') * F('items__precio_kg'), output_field=DecimalField())
-        ).aggregate(total=Sum('subtotal'))['total'] or 0
+        ventas_total = ventas_filtradas_por_proveedor(
+            Sale.objects.filter(business=business, cancelada=False)
+        )
+        m_hist = calcular_metricas(ventas_total)
         
         # Resumen de inventario
         
         # Total de inventario
-        lotes = FruitLot.objects.filter(business=perfil.business)
+        lotes = FruitLot.objects.filter(business=business)
+        if is_proveedor:
+            lotes = lotes.filter(Q(proveedor=proveedor) | Q(propietario_original=proveedor))
         total_lotes = lotes.count()
         total_kg_stock = lotes.aggregate(total=Sum('peso_neto'))['total'] or 0
         
         # Obtener reservas por lote
         reservas = StockReservation.objects.filter(
-            lote__business=perfil.business
+            lote__business=business
         ).values('lote').annotate(
             total_reservado=Sum('kg_reservados')
         )
@@ -110,7 +152,7 @@ class ReportSummaryView(APIView):
                 valor_inventario += lote.peso_neto * lote.costo_actualizado()
         
         # Últimos 5 productos con menos stock
-        productos = Product.objects.filter(business=perfil.business)
+        productos = Product.objects.filter(business=business)
         
         productos_bajo_stock = []
         for producto in productos:
@@ -137,23 +179,28 @@ class ReportSummaryView(APIView):
         productos_bajo_stock = productos_bajo_stock[:5]
         
         # Información de turnos
-        
-        # Verificar turno activo
-        turno_activo = Shift.objects.filter(
-            business=perfil.business,
-            estado="abierto"
-        ).first()
-        
-        turno_usuario = Shift.objects.filter(
-            business=perfil.business,
-            usuario_abre=user,
-            estado="abierto"
-        ).first()
-        
-        # Últimos 3 turnos
-        ultimos_turnos = Shift.objects.filter(
-            business=perfil.business
-        ).order_by('-fecha_apertura')[:3]
+        # Para proveedores, ocultar información de turnos
+        if is_proveedor:
+            turno_activo = None
+            turno_usuario = None
+            ultimos_turnos = []
+        else:
+            # Verificar turno activo
+            turno_activo = Shift.objects.filter(
+                business=business,
+                estado="abierto"
+            ).first()
+            
+            turno_usuario = Shift.objects.filter(
+                business=business,
+                usuario_abre=user,
+                estado="abierto"
+            ).first()
+            
+            # Últimos 3 turnos
+            ultimos_turnos = Shift.objects.filter(
+                business=business
+            ).order_by('-fecha_apertura')[:3]
         
         ultimos_turnos_data = []
         for turno in ultimos_turnos:
@@ -161,14 +208,18 @@ class ReportSummaryView(APIView):
             
             # Calcular ventas en el turno
             if turno.estado == "cerrado" and turno.fecha_cierre:
-                ventas_turno = Sale.objects.filter(
-                    business=perfil.business,
-                    created_at__range=[turno.fecha_apertura, turno.fecha_cierre]
+                ventas_turno = ventas_filtradas_por_proveedor(
+                    Sale.objects.filter(
+                        business=business,
+                        created_at__range=[turno.fecha_apertura, turno.fecha_cierre]
+                    )
                 )
             else:
-                ventas_turno = Sale.objects.filter(
-                    business=perfil.business,
-                    created_at__gte=turno.fecha_apertura
+                ventas_turno = ventas_filtradas_por_proveedor(
+                    Sale.objects.filter(
+                        business=business,
+                        created_at__gte=turno.fecha_apertura
+                    )
                 )
             
             total_ventas_turno = ventas_turno.count()
@@ -188,26 +239,10 @@ class ReportSummaryView(APIView):
         return Response({
             'fecha_actual': hoy,
             'ventas': {
-                'hoy': {
-                    'total_ventas': total_ventas_hoy,
-                    'total_kg': total_kg_hoy,
-                    'total_ingresos': total_ingresos_hoy
-                },
-                'semana': {
-                    'total_ventas': total_ventas_semana,
-                    'total_kg': total_kg_semana,
-                    'total_ingresos': total_ingresos_semana
-                },
-                'mes': {
-                    'total_ventas': total_ventas_mes,
-                    'total_kg': total_kg_mes,
-                    'total_ingresos': total_ingresos_mes
-                },
-                'historico': {
-                    'total_ventas': total_ventas_historico,
-                    'total_kg': total_kg_historico,
-                    'total_ingresos': total_ingresos_historico
-                }
+                'hoy': m_hoy,
+                'semana': m_semana,
+                'mes': m_mes,
+                'historico': m_hist,
             },
             'inventario': {
                 'total_lotes': total_lotes,
@@ -234,8 +269,10 @@ class StockReportView(APIView):
                 return round(valor, 2)
             return valor
 
-        # Obtener el negocio del usuario desde su perfil
-        business = request.user.perfil.business
+        # Obtener el negocio del usuario mediante helper
+        business = _get_business_from_user(request.user)
+        if not business:
+            return Response({'detail': 'Usuario no tiene un negocio asociado.'}, status=404)
         
         # Verificar si el usuario es admin o supervisor para mostrar información sensible
         es_admin_o_supervisor = request.user.groups.filter(name__in=['Administrador', 'Supervisor']).exists()
@@ -308,19 +345,11 @@ class StockReportView(APIView):
         if calibre:
             queryset = queryset.filter(calibre=calibre)
         
-        # Filtrar por tipo de producto (categorías especiales)
+        # Filtrar por tipo de producto (categorías especiales) usando campo tipo_producto
         if tipo_producto == 'paltas':
-            # Usamos filtro exacto para evitar confusiones entre 'palta' y 'platano'
-            queryset = queryset.filter(Q(producto__nombre__iexact='palta') | 
-                                      Q(producto__nombre__istartswith='palta ') | 
-                                      Q(producto__nombre__iendswith=' palta') | 
-                                      Q(producto__nombre__icontains=' palta '))
+            queryset = queryset.filter(producto__tipo_producto='palta')
         elif tipo_producto == 'otros':
-            # Excluimos específicamente las paltas
-            queryset = queryset.exclude(Q(producto__nombre__iexact='palta') | 
-                                       Q(producto__nombre__istartswith='palta ') | 
-                                       Q(producto__nombre__iendswith=' palta') | 
-                                       Q(producto__nombre__icontains=' palta '))
+            queryset = queryset.filter(producto__tipo_producto='otro')
         
         # Filtrar por nombre específico de producto (ya aplicado arriba, eliminamos duplicación)
 

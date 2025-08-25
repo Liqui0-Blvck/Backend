@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import BoxType, FruitLot, StockReservation, Product, GoodsReception, Supplier, ReceptionDetail, SupplierPayment, ConcessionSettlement, ConcessionSettlementDetail
+from accounts.models import Perfil
 from sales.models import Customer, SaleItem
 from django.db.models import Sum, Max, F
 from decimal import Decimal
@@ -37,6 +38,8 @@ class SupplierSerializer(serializers.ModelSerializer):
     # Campos para análisis financiero
     resumen_pagos = serializers.SerializerMethodField()
     resumen_liquidaciones = serializers.SerializerMethodField()
+    # Flag de vinculación a usuario
+    vinculado = serializers.SerializerMethodField()
     
     class Meta:
         model = Supplier
@@ -45,7 +48,7 @@ class SupplierSerializer(serializers.ModelSerializer):
                  'total_deuda', 'total_pagado', 'recepciones_pendientes',
                  'cantidad_recepciones', 'cantidad_liquidaciones', 'cantidad_pallets', 'cantidad_cajas',
                  'total_kg_recepcionados', 'ultima_recepcion', 'ultima_liquidacion', 'ultimo_pago',
-                 'detalle_pallets', 'resumen_pagos', 'resumen_liquidaciones')
+                 'detalle_pallets', 'resumen_pagos', 'resumen_liquidaciones', 'vinculado')
     
     def get_total_deuda(self, obj):
         # Calcular el total de deuda sumando los montos totales solo de las recepciones pendientes de pago
@@ -233,6 +236,13 @@ class SupplierSerializer(serializers.ModelSerializer):
             })
         
         return lista_liquidaciones
+
+    def get_vinculado(self, obj):
+        """Retorna True si existe un Perfil vinculado a este proveedor"""
+        try:
+            return Perfil.objects.filter(proveedor=obj).exists()
+        except Exception:
+            return False
     
     def get_cantidad_recepciones(self, obj):
         """Retorna el número total de recepciones del proveedor"""
@@ -279,13 +289,14 @@ class SupplierSerializerList(serializers.ModelSerializer):
     recepciones_count = serializers.SerializerMethodField()
     liquidaciones_count = serializers.SerializerMethodField()
     ultima_actividad = serializers.SerializerMethodField()
+    vinculado = serializers.SerializerMethodField()
     
     class Meta:
         model = Supplier
         fields = (
             'uid', 'nombre', 'rut', 'telefono', 'email', 'contacto', 
             'activo', 'total_deuda', 'total_pagado', 'recepciones_count',
-            'liquidaciones_count', 'ultima_actividad'
+            'liquidaciones_count', 'ultima_actividad', 'vinculado'
         )
     
     def get_total_deuda(self, obj):
@@ -326,6 +337,13 @@ class SupplierSerializerList(serializers.ModelSerializer):
             return ultima_liquidacion
         else:
             return None
+
+    def get_vinculado(self, obj):
+        """Retorna True si existe un Perfil vinculado a este proveedor"""
+        try:
+            return Perfil.objects.filter(proveedor=obj).exists()
+        except Exception:
+            return False
 
 class ProductSerializer(serializers.ModelSerializer):
     image_url = serializers.SerializerMethodField()

@@ -63,6 +63,8 @@ class Perfil(models.Model):
     phone = models.CharField(_('phone number'), max_length=15, null=True, blank=True)
     rut = models.CharField(_('tax ID'), max_length=15, unique=True, null=True, blank=True)
     business = models.ForeignKey('business.Business', on_delete=models.SET_NULL, related_name='miembros', null=True, blank=True)
+    # Si el usuario pertenece al rol Proveedor, se asocia a un único Supplier
+    proveedor = models.ForeignKey('inventory.Supplier', on_delete=models.SET_NULL, null=True, blank=True, related_name='usuarios')
     
     class Meta:
         verbose_name = _('profile')

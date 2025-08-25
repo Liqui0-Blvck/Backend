@@ -8,6 +8,7 @@ class PerfilInline(admin.StackedInline):
     can_delete = False
     verbose_name_plural = 'Perfil'
     fk_name = 'user'
+    fields = ('rut', 'phone', 'business', 'proveedor')
 
 class CustomUserAdmin(UserAdmin):
     model = CustomUser
@@ -39,9 +40,9 @@ class CustomUserAdmin(UserAdmin):
     get_full_name.short_description = 'Nombre completo'
 
 class PerfilAdmin(admin.ModelAdmin):
-    list_display = ('user', 'rut', 'phone', 'business')
-    search_fields = ('user__email', 'rut', 'phone')
-    list_filter = ('business',)
+    list_display = ('user', 'rut', 'phone', 'business', 'proveedor')
+    search_fields = ('user__email', 'rut', 'phone', 'proveedor__nombre', 'proveedor__rut')
+    list_filter = ('business', 'proveedor')
 
 admin.site.register(CustomUser, CustomUserAdmin)
 admin.site.register(Perfil, PerfilAdmin)

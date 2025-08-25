@@ -10,6 +10,7 @@ from rest_framework.exceptions import ValidationError
 from inventory.models import FruitLot
 from django.utils.dateparse import parse_date
 from datetime import datetime, timedelta
+from django.db.models import Q
 from decimal import Decimal
 from django.db import transaction
 
@@ -76,6 +77,16 @@ class SalePendingViewSet(viewsets.ModelViewSet):
 
         if end_date:
             end_date = datetime.combine(end_date, datetime.max.time())
+
+        # Filtrar por proveedor si el usuario es Proveedor
+        if user.groups.filter(name='Proveedor').exists():
+            proveedor = getattr(perfil, 'proveedor', None)
+            if not proveedor:
+                return SalePending.objects.none()
+            queryset = queryset.filter(
+                Q(items__lote__proveedor=proveedor) |
+                Q(items__lote__propietario_original=proveedor)
+            ).distinct()
 
         return queryset.filter(created_at__range=[start_date, end_date])
 
@@ -318,7 +329,18 @@ class SaleViewSet(viewsets.ModelViewSet):
         # Aseguramos que end_date incluya todo el día
         if end_date:
             end_date = datetime.combine(end_date, datetime.max.time())
-            
+
+        # Filtrar por proveedor si el usuario es Proveedor
+        if user.groups.filter(name='Proveedor').exists():
+            proveedor = getattr(perfil, 'proveedor', None)
+            if not proveedor:
+                return Sale.objects.none()
+            queryset = queryset.filter(
+                Q(items__lote__proveedor=proveedor) |
+                Q(items__proveedor_original=proveedor) |
+                Q(items__lote__propietario_original=proveedor)
+            ).distinct()
+
         return queryset.filter(created_at__range=[start_date, end_date])
     
     def perform_create(self, serializer):

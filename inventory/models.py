@@ -501,7 +501,7 @@ def crear_lotes_al_aprobar_recepcion(sender, instance, created, **kwargs):
                             producto=detalle.producto,
                             # El tipo_producto es un atributo del producto, no del lote
                             marca=detalle.variedad or "",  # Usar variedad como marca si está disponible
-                            proveedor=instance.proveedor.nombre if instance.proveedor else "",
+                            proveedor=instance.proveedor if instance.proveedor else None,
                             procedencia=instance.proveedor.direccion if instance.proveedor and instance.proveedor.direccion else "No especificada",
                             pais="Chile",  # Valor por defecto, podría ser un campo en Proveedor
                             calibre=detalle.calibre or "No especificado",
