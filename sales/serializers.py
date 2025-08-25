@@ -307,6 +307,16 @@ class SalePendingSerializer(serializers.ModelSerializer):
             elif estado == 'confirmada':
                 # Convertir la venta pendiente en una venta directa
                 with transaction.atomic():
+                    # Validar stock disponible antes de confirmar la venta
+                    for pending_item in instance.items.all():
+                        lote = pending_item.lote
+                        cajas_solicitadas = pending_item.cantidad_unidades
+                        
+                        # Verificar stock disponible (sin contar las reservas que estamos por confirmar)
+                        if lote.cantidad_cajas < cajas_solicitadas:
+                            logger.error(f"Stock insuficiente para confirmar venta. Lote {lote.uid}: disponible={lote.cantidad_cajas}, solicitado={cajas_solicitadas}")
+                            raise serializers.ValidationError(f"Stock insuficiente para confirmar venta. Lote {lote.uid}: disponible={lote.cantidad_cajas}, solicitado={cajas_solicitadas}")
+                    
                     # Crear la venta
                     sale = Sale.objects.create(
                         cliente=instance.cliente,
@@ -324,6 +334,7 @@ class SalePendingSerializer(serializers.ModelSerializer):
                     # Crear los items de venta y actualizar el inventario
                     for pending_item in instance.items.all():
                         # Crear el SaleItem con los campos correctos según el modelo
+                        logger.info(f"Creando SaleItem para lote {pending_item.lote.uid}: cajas={pending_item.cantidad_unidades}, stock actual={pending_item.lote.cantidad_cajas}")
                         SaleItem.objects.create(
                             venta=sale,
                             lote=pending_item.lote,
@@ -437,14 +448,29 @@ class SaleSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def create(self, validated_data):
+        import logging
+        logger = logging.getLogger(__name__)
+        
         items_data = validated_data.pop('items')
         perfil = self.context['request'].user.perfil
         
+        # Validar stock disponible antes de crear la venta
+        for item_data in items_data:
+            lote = item_data['lote']
+            unidades_vendidas = item_data.get('unidades_vendidas', 0)
+            
+            # Verificar que hay suficiente stock
+            if unidades_vendidas > lote.cantidad_cajas:
+                logger.error(f"SaleSerializer.create: Error - Intentando vender {unidades_vendidas} cajas cuando solo hay {lote.cantidad_cajas} disponibles en lote {lote.uid}")
+                raise serializers.ValidationError(f"No hay suficiente stock. Intentando vender {unidades_vendidas} cajas cuando solo hay {lote.cantidad_cajas} disponibles en lote {lote.uid}.")
+        
+        # Crear la venta
         sale = Sale.objects.create(vendedor=self.context['request'].user, business=perfil.business, **validated_data)
-
         total_venta = Decimal('0.0')
 
+        # Crear los items de venta
         for item_data in items_data:
+            logger.info(f"Creando SaleItem para lote {item_data['lote'].uid}: cajas={item_data.get('unidades_vendidas', 0)}, stock actual={item_data['lote'].cantidad_cajas}")
             # Mapeo explícito para garantizar que los datos del payload se asignan correctamente
             sale_item = SaleItem.objects.create(
                 sale=sale,
@@ -593,7 +619,7 @@ class SaleSerializer(serializers.ModelSerializer):
                 item_payload = {
                     'lote': FruitLot.objects.get(uid=item_data.get('lote')),
                     'unidades_vendidas': item_data.get('unidades_vendidas', 0) or 0,
-                    'precio_unidad': item_data.get('precio_unitario', 0) or 0,
+                    'precio_unidad': item_data.get('precio_unidad', 0) or 0,
                     'peso_vendido': item_data.get('peso_vendido', 0) or 0,
                     'precio_kg': item_data.get('precio_kg', 0) or 0,
                     'subtotal': item_data.get('subtotal', 0) or 0,
@@ -629,7 +655,7 @@ class SaleSerializer(serializers.ModelSerializer):
                 item_payload = {
                     'lote': FruitLot.objects.get(uid=item_data.get('lote')),
                     'unidades_vendidas': item_data.get('unidades_vendidas', 0) or 0,
-                    'precio_unidad': item_data.get('precio_unitario', 0) or 0,
+                    'precio_unidad': item_data.get('precio_unidad', 0) or 0,
                     'peso_vendido': item_data.get('peso_vendido', 0) or 0,
                     'precio_kg': item_data.get('precio_kg', 0) or 0,
                     'subtotal': item_data.get('subtotal', 0) or 0,

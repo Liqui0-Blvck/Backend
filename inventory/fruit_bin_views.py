@@ -4,19 +4,110 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django_filters.rest_framework import DjangoFilterBackend, FilterSet, NumberFilter, ChoiceFilter, CharFilter
 from .models import FruitBin
 from .fruit_bin_serializers import FruitBinListSerializer, FruitBinDetailSerializer, FruitBinBulkCreateSerializer
 from core.permissions import IsSameBusiness
 from accounts.models import CustomUser, Perfil
 
 
+class FruitBinFilter(FilterSet):
+    """Filtros personalizados para FruitBin"""
+    peso_neto_min = NumberFilter(method='filter_peso_neto_min', label='Peso neto mínimo')
+    peso_neto_max = NumberFilter(method='filter_peso_neto_max', label='Peso neto máximo')
+    estado = ChoiceFilter(choices=FruitBin.ESTADO_CHOICES)
+    producto = CharFilter(method='filter_producto', label='Producto (ID o nombre)')
+    calidad = NumberFilter(field_name='calidad', label='Calidad (1-5)')
+    
+    def filter_peso_neto_min(self, queryset, name, value):
+        """Filtra bins con peso neto mayor o igual al valor especificado"""
+        if value is not None:
+            filtered_bins = []
+            for bin in queryset:
+                if bin.peso_neto >= value:
+                    filtered_bins.append(bin.pk)
+            return queryset.filter(pk__in=filtered_bins)
+        return queryset
+    
+    def filter_peso_neto_max(self, queryset, name, value):
+        """Filtra bins con peso neto menor o igual al valor especificado"""
+        if value is not None:
+            filtered_bins = []
+            for bin in queryset:
+                if bin.peso_neto <= value:
+                    filtered_bins.append(bin.pk)
+            return queryset.filter(pk__in=filtered_bins)
+        return queryset
+    
+    def filter_producto(self, queryset, name, value):
+        """Filtra bins por producto, aceptando tanto ID como nombre"""
+        from .models import Product
+        import json
+        
+        if value is None:
+            return queryset
+        
+        # Verificar si el valor es un JSON y extraer el valor real
+        if isinstance(value, str) and value.startswith('[') and value.endswith(']'):
+            try:
+                # Intentar parsear como JSON
+                json_value = json.loads(value)
+                if isinstance(json_value, list) and len(json_value) > 0:
+                    # Tomar el primer valor de la lista
+                    value = json_value[0]
+                    # Si hay un segundo elemento que es un diccionario con una clave '0'
+                    if len(json_value) > 1 and isinstance(json_value[1], dict) and '0' in json_value[1]:
+                        value = json_value[1]['0']
+            except json.JSONDecodeError:
+                pass
+        
+        # Caso especial: "Todos los productos" o similar
+        if isinstance(value, str) and value.lower() in ['todos los productos', 'todos', 'all', 'all products']:
+            return queryset
+            
+        # Intentar convertir a entero para buscar por ID
+        try:
+            producto_id = int(value)
+            return queryset.filter(producto_id=producto_id)
+        except (ValueError, TypeError):
+            # Si no es un ID válido, buscar por nombre
+            productos = Product.objects.filter(nombre__icontains=value)
+            if productos.exists():
+                return queryset.filter(producto__in=productos)
+            return queryset.none()
+    
+    class Meta:
+        model = FruitBin
+        fields = ['estado', 'producto', 'variedad', 'proveedor', 'calidad', 'peso_neto_min', 'peso_neto_max']
+
+
 class FruitBinViewSet(viewsets.ModelViewSet):
     """
     ViewSet para gestionar bins de fruta.
     Permite listar, crear, actualizar y eliminar bins.
+    
+    Filtros disponibles:
+    - estado: Filtra por el estado del bin (DISPONIBLE, EN_PROCESO, TRANSFORMADO, DESCARTADO)
+    - producto: Filtra por el producto asociado al bin. Acepta tanto ID como nombre del producto
+      Ejemplos: ?producto=1 o ?producto=Manzana
+    - variedad: Filtra por la variedad del bin
+    - proveedor: Filtra por el proveedor del bin
+    - calidad: Filtra por la calidad del bin (1-5, donde 5 es Excelente)
+      Ejemplo: ?calidad=4
+    - peso_neto_min: Filtra bins con peso neto mayor o igual al valor especificado
+      Ejemplo: ?peso_neto_min=100
+    - peso_neto_max: Filtra bins con peso neto menor o igual al valor especificado
+      Ejemplo: ?peso_neto_max=500
+    
+    También soporta búsqueda por texto en los campos: 'codigo', 'producto__nombre', 'variedad', 'proveedor__nombre'
+    Ejemplo: ?search=Hass
+    
+    Y ordenamiento por: 'fecha_recepcion', 'codigo', 'peso_bruto'
+    Ejemplo: ?ordering=-fecha_recepcion (descendente) o ?ordering=codigo (ascendente)
     """
     permission_classes = [IsAuthenticated, IsSameBusiness]
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_class = FruitBinFilter
     search_fields = ['codigo', 'producto__nombre', 'variedad', 'proveedor__nombre']
     ordering_fields = ['fecha_recepcion', 'codigo', 'peso_bruto']
     ordering = ['-fecha_recepcion']

@@ -18,6 +18,10 @@ class BinToLotSerializer(serializers.Serializer):
     cantidad_cajas = serializers.IntegerField(
         help_text="Cantidad de cajas en el nuevo lote"
     )
+    proveedor = serializers.UUIDField(
+        required=False,
+        help_text="UUID del proveedor (opcional). Si no se proporciona, se usará el proveedor del bin"
+    )
     calibre = serializers.CharField(
         max_length=16,
         help_text="Calibre del nuevo lote"
@@ -59,6 +63,18 @@ class BinToLotSerializer(serializers.Serializer):
         bins = FruitBin.objects.filter(uid__in=bin_ids)
         if bins.count() != len(bin_ids):
             raise serializers.ValidationError("Uno o más bins no existen")
+            
+        # Validar el proveedor si se proporciona
+        from .models import Supplier
+        proveedor_id = data.get('proveedor')
+        if proveedor_id:
+            try:
+                proveedor = Supplier.objects.get(uid=proveedor_id)
+                data['proveedor_obj'] = proveedor
+            except Supplier.DoesNotExist:
+                raise serializers.ValidationError({"proveedor": f"No se encontró un proveedor con el ID {proveedor_id}"})
+        else:
+            data['proveedor_obj'] = None
         
         # Verificar que todos los bins estén disponibles
         unavailable_bins = bins.exclude(estado='DISPONIBLE')
@@ -152,11 +168,14 @@ class BinToLotSerializer(serializers.Serializer):
             cantidad_unidades = validated_data['cantidad_cajas'] * unidades_por_caja
         
         # Crear el nuevo lote
+        # Usar el proveedor proporcionado en la solicitud si está disponible, de lo contrario usar el del bin
+        proveedor = validated_data.get('proveedor_obj') or bin_referencia.proveedor
+        
         nuevo_lote = FruitLot.objects.create(
             producto=bin_referencia.producto,
             marca=bin_referencia.variedad or "",
-            proveedor=bin_referencia.proveedor.nombre if bin_referencia.proveedor else "",
-            procedencia=bin_referencia.proveedor.direccion if bin_referencia.proveedor and bin_referencia.proveedor.direccion else "No especificada",
+            proveedor=proveedor,
+            procedencia=proveedor.direccion if proveedor and proveedor.direccion else "No especificada",
             pais="Chile",  # Valor por defecto
             calibre=validated_data['calibre'],
             box_type=box_type,

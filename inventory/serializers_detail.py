@@ -69,8 +69,9 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
     
     def get_origen(self, obj):
         return {
-            'proveedor_id': self.get_proveedor_id(obj),
-            'proveedor': obj.proveedor,
+            # 'proveedor_id': self.get_proveedor_id(obj),
+            'proveedor': obj.proveedor.nombre if obj.proveedor else None,
+            # 'proveedor_uid': str(obj.proveedor.uid) if obj.proveedor else None,
             'procedencia': obj.procedencia,
             'pais': obj.pais
         }
@@ -422,16 +423,21 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
             estado_anterior = None
             if i > 0:
                 estado_anterior = maduration_history[i-1].estado_maduracion
+            
+            # Formatear los estados para mejor legibilidad
+            estado_anterior_formateado = self._formatear_estado_maduracion(estado_anterior)
+            estado_nuevo_formateado = self._formatear_estado_maduracion(history.estado_maduracion)
                 
             movimientos.append({
                 'id': i + 1,
                 'fecha': history.fecha_cambio.isoformat() if hasattr(history.fecha_cambio, 'isoformat') else str(history.fecha_cambio),
-                'tipo': 'cambio_maduracion',
-                'estado_anterior': estado_anterior,
-                'estado_nuevo': history.estado_maduracion,
+                'tipo': 'Cambio de Maduración',
+                'tipo_codigo': 'cambio_maduracion',
+                'estado_anterior': estado_anterior_formateado,
+                'estado_nuevo': estado_nuevo_formateado,
                 'cantidad': None,
                 'usuario': 'Sistema',  # Podría mejorarse si se guarda el usuario que hizo el cambio
-                'notas': None
+                'notas': f"Cambio de {estado_anterior_formateado or 'inicial'} a {estado_nuevo_formateado}"
             })
         
         # Obtener historial de ventas
@@ -440,16 +446,24 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
             # Obtener el peso vendido desde los items de la venta
             peso_vendido = venta.items.filter(lote=obj).aggregate(total=Sum('peso_vendido'))['total'] or 0
             
+            # Formatear el nombre del usuario
+            nombre_usuario = f"{venta.vendedor.first_name} {venta.vendedor.last_name}".strip() if hasattr(venta, 'vendedor') and venta.vendedor else "Sistema"
+            
+            # Formatear el nombre del cliente
+            nombre_cliente = venta.cliente.nombre if venta.cliente else getattr(venta, 'nombre_cliente', 'Cliente no especificado')
+            
             # Añadir la venta como un movimiento
             movimientos.append({
                 'id': len(maduration_history) + i + 1,
                 'fecha': venta.created_at.isoformat() if hasattr(venta.created_at, 'isoformat') else str(venta.created_at),
-                'tipo': 'venta',
+                'tipo': 'Venta',
+                'tipo_codigo': 'venta',
                 'estado_anterior': None,
                 'estado_nuevo': None,
                 'cantidad': peso_vendido,
-                'usuario': f"{venta.vendedor.first_name} {venta.vendedor.last_name}".strip() if hasattr(venta, 'vendedor') and venta.vendedor else "Sistema",
-                'notas': f"Venta #{venta.id} - {venta.cliente.nombre if venta.cliente else getattr(venta, 'nombre_cliente', 'Cliente no especificado')}"
+                'cantidad_formateada': f"{peso_vendido:,.2f} kg",
+                'usuario': nombre_usuario,
+                'notas': f"Venta #{venta.id} - {nombre_cliente}"
             })
             
         # Ordenar movimientos por fecha
@@ -460,6 +474,20 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
             mov['id'] = i + 1
             
         return movimientos
+        
+    def _formatear_estado_maduracion(self, estado):
+        """Formatea el estado de maduración para mejor legibilidad"""
+        if not estado:
+            return None
+            
+        mapeo_estados = {
+            'verde': 'Verde',
+            'pre-maduro': 'Pre-maduro',
+            'maduro': 'Maduro',
+            'sobremaduro': 'Sobremaduro'
+        }
+        
+        return mapeo_estados.get(estado, estado.capitalize())
         
     def get_valores_llegada(self, obj):
         """
@@ -506,22 +534,45 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
         items_venta = SaleItem.objects.filter(lote=obj).select_related('venta').order_by('venta__created_at')
         
         for i, item in enumerate(items_venta):
+            # Formatear el nombre del usuario
+            nombre_usuario = f"{item.venta.vendedor.first_name} {item.venta.vendedor.last_name}".strip() if hasattr(item.venta, 'vendedor') and item.venta.vendedor else "Sistema"
+            
+            # Formatear el nombre del cliente
+            nombre_cliente = item.venta.cliente.nombre if item.venta.cliente else getattr(item.venta, 'nombre_cliente', 'Cliente no especificado')
+            
+            # Formatear el precio y peso para mejor legibilidad
+            precio = float(item.precio_kg) if item.precio_kg else 0
+            peso_vendido = float(item.peso_vendido) if item.peso_vendido else 0
+            
             historial.append({
                 'id': i + 1,
                 'fecha': item.venta.created_at.isoformat() if hasattr(item.venta.created_at, 'isoformat') else str(item.venta.created_at),
-                'precio': float(item.precio_kg) if item.precio_kg else 0,
-                'peso_vendido': float(item.peso_vendido) if item.peso_vendido else 0,
-                'usuario': f"{item.venta.vendedor.first_name} {item.venta.vendedor.last_name}".strip() if hasattr(item.venta, 'vendedor') and item.venta.vendedor else "Sistema",
-                'notas': f"Venta #{item.venta.id} - {item.venta.cliente.nombre if item.venta.cliente else getattr(item.venta, 'nombre_cliente', 'Cliente no especificado')}"
+                'precio': precio,
+                'precio_formateado': f"${precio:,.0f}/kg",
+                'peso_vendido': peso_vendido,
+                'peso_formateado': f"{peso_vendido:,.2f} kg",
+                'subtotal': precio * peso_vendido,
+                'subtotal_formateado': f"${precio * peso_vendido:,.0f}",
+                'tipo': 'Venta',
+                'tipo_codigo': 'venta',
+                'usuario': nombre_usuario,
+                'notas': f"Venta #{item.venta.id} - {nombre_cliente}"
             })
         
         # Si no hay ventas, agregar al menos el precio recomendado actual
         if not historial:
+            precio_recomendado = self.get_precio_recomendado_kg(obj)
             historial.append({
                 'id': 1,
                 'fecha': timezone.now().isoformat(),
-                'precio': self.get_precio_recomendado_kg(obj),
+                'precio': precio_recomendado,
+                'precio_formateado': f"${precio_recomendado:,.0f}/kg",
                 'peso_vendido': 0,
+                'peso_formateado': "0,00 kg",
+                'subtotal': 0,
+                'subtotal_formateado': "$0",
+                'tipo': 'Precio Sugerido',
+                'tipo_codigo': 'precio_sugerido',
                 'usuario': "Sistema",
                 'notas': "Precio recomendado inicial"
             })

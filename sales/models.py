@@ -310,6 +310,17 @@ class SaleItem(BaseModel):
         # Verificar si es un objeto nuevo (sin ID aún)
         is_new = self.pk is None
         
+        # Importar logging
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Validar que no se vendan más cajas de las disponibles
+        if is_new and not self.venta.cancelada and self.lote:
+            if self.unidades_vendidas > self.lote.cantidad_cajas:
+                logger.error(f"SaleItem.save: Error - Intentando vender {self.unidades_vendidas} cajas cuando solo hay {self.lote.cantidad_cajas} disponibles")
+                from django.core.exceptions import ValidationError
+                raise ValidationError(f"No hay suficiente stock. Intentando vender {self.unidades_vendidas} cajas cuando solo hay {self.lote.cantidad_cajas} disponibles.")
+        
         # Guardar el objeto
         super().save(*args, **kwargs)
         
@@ -317,18 +328,30 @@ class SaleItem(BaseModel):
         if is_new and not self.venta.cancelada:
             # Actualizar el inventario del lote
             if self.lote:
+                # Log para depuración
+                logger.info(f"SaleItem.save: Actualizando inventario para lote {self.lote.uid}")
+                logger.info(f"SaleItem.save: Cantidad de cajas antes: {self.lote.cantidad_cajas}")
+                logger.info(f"SaleItem.save: Unidades vendidas: {self.unidades_vendidas}")
+                
                 # Para productos tipo palta, actualizar por peso
                 if self.lote.producto and self.lote.producto.tipo_producto == 'palta':
                     # Actualizar peso neto
                     if self.peso_vendido > 0:
+                        logger.info(f"SaleItem.save: Peso neto antes: {self.lote.peso_neto}")
+                        logger.info(f"SaleItem.save: Peso vendido: {self.peso_vendido}")
                         self.lote.peso_neto = max(0, self.lote.peso_neto - self.peso_vendido)
+                        logger.info(f"SaleItem.save: Peso neto después: {self.lote.peso_neto}")
                         
                 # Para todos los productos, actualizar cajas
                 if self.unidades_vendidas > 0:
-                    self.lote.cantidad_cajas = max(0, self.lote.cantidad_cajas - self.unidades_vendidas)
+                    # Asegurarse de que no se vendan más cajas de las disponibles
+                    if self.unidades_vendidas <= self.lote.cantidad_cajas:
+                        self.lote.cantidad_cajas = self.lote.cantidad_cajas - self.unidades_vendidas
+                        logger.info(f"SaleItem.save: Cantidad de cajas después: {self.lote.cantidad_cajas}")
                     
                 # Guardar los cambios en el lote
                 self.lote.save(update_fields=['peso_neto', 'cantidad_cajas', 'updated_at'])
+                logger.info(f"SaleItem.save: Cambios guardados en el lote {self.lote.uid}")
     
     def __str__(self):
         if self.lote and self.lote.producto:
@@ -425,6 +448,23 @@ class SalePendingItem(BaseModel):
     # Campos comunes
     subtotal = models.DecimalField(max_digits=10, decimal_places=2, 
                                  help_text="Subtotal del ítem (precio * cantidad)")
+    
+    def save(self, *args, **kwargs):
+        # Verificar si es un objeto nuevo (sin ID aún)
+        is_new = self.pk is None
+        
+        # Importar logging
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Validar que no se vendan más cajas de las disponibles
+        if is_new and self.lote:
+            if self.cantidad_unidades > self.lote.cantidad_cajas:
+                logger.error(f"SalePendingItem.save: Error - Intentando reservar {self.cantidad_unidades} cajas cuando solo hay {self.lote.cantidad_cajas} disponibles")
+                from django.core.exceptions import ValidationError
+                raise ValidationError(f"No hay suficiente stock. Intentando reservar {self.cantidad_unidades} cajas cuando solo hay {self.lote.cantidad_cajas} disponibles.")
+        
+        super().save(*args, **kwargs)
     
     def __str__(self):
         if self.lote and self.lote.producto:

@@ -61,6 +61,7 @@ INSTALLED_APPS = [
     # Rest Framework
     'rest_framework',
     'rest_framework_simplejwt',
+    'django_filters',
     
     # Cors
     'corsheaders',
@@ -306,5 +307,7 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'accounts.authentication.CustomJWTAuthentication',
     ],
-    # Puedes agregar otros settings aquí
+    'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',
+    ],
 }

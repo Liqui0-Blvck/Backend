@@ -8,7 +8,10 @@ class FruitBinListSerializer(serializers.ModelSerializer):
     """Serializador para listar bins de fruta con información resumida"""
     producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
     producto_tipo = serializers.CharField(source='producto.tipo_producto', read_only=True)
+    producto = serializers.UUIDField(source='producto.uid', read_only=True)
     proveedor_nombre = serializers.CharField(source='proveedor.nombre', read_only=True)
+    proveedor = serializers.UUIDField(source='proveedor.uid', read_only=True)
+    recepcion = serializers.UUIDField(source='recepcion.uid', read_only=True, allow_null=True)
     peso_neto = serializers.SerializerMethodField()
     estado_display = serializers.CharField(source='get_estado_display', read_only=True)
     calidad_display = serializers.CharField(source='get_calidad_display', read_only=True)
@@ -18,7 +21,8 @@ class FruitBinListSerializer(serializers.ModelSerializer):
         fields = [
             'uid', 'codigo', 'producto', 'producto_nombre', 'producto_tipo', 'variedad',
             'peso_bruto', 'peso_tara', 'peso_neto', 'estado', 'estado_display',
-            'calidad', 'calidad_display', 'proveedor', 'proveedor_nombre', 'fecha_recepcion'
+            'calidad', 'calidad_display', 'proveedor', 'proveedor_nombre', 
+            'recepcion', 'fecha_recepcion'
         ]
     
     def get_peso_neto(self, obj):
@@ -29,9 +33,12 @@ class FruitBinDetailSerializer(serializers.ModelSerializer):
     """Serializador detallado para bins de fruta con toda la información"""
     producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
     producto_tipo = serializers.CharField(source='producto.tipo_producto', read_only=True)
+    producto_uid = serializers.UUIDField(source='producto.uid', read_only=True)
     producto_info = ProductSerializer(source='producto', read_only=True)
     proveedor_nombre = serializers.CharField(source='proveedor.nombre', read_only=True)
+    proveedor_uid = serializers.UUIDField(source='proveedor.uid', read_only=True, allow_null=True)
     proveedor_info = serializers.SerializerMethodField()
+    recepcion_uid = serializers.UUIDField(source='recepcion.uid', read_only=True, allow_null=True)
     peso_neto = serializers.SerializerMethodField()
     estado_display = serializers.CharField(source='get_estado_display', read_only=True)
     calidad_display = serializers.CharField(source='get_calidad_display', read_only=True)
@@ -40,10 +47,10 @@ class FruitBinDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = FruitBin
         fields = [
-            'uid', 'codigo', 'producto', 'producto_nombre', 'producto_tipo', 'producto_info', 'variedad',
+            'uid', 'codigo', 'producto', 'producto_uid', 'producto_nombre', 'producto_tipo', 'producto_info', 'variedad',
             'peso_bruto', 'peso_tara', 'peso_neto', 'estado', 'estado_display',
-            'calidad', 'calidad_display', 'recepcion', 'recepcion_info', 'fecha_recepcion',
-            'proveedor', 'proveedor_nombre', 'proveedor_info', 'temperatura', 'observaciones',
+            'calidad', 'calidad_display', 'recepcion', 'recepcion_uid', 'recepcion_info', 'fecha_recepcion',
+            'proveedor', 'proveedor_uid', 'proveedor_nombre', 'proveedor_info', 'temperatura', 'observaciones',
             'created_at', 'updated_at'
         ]
     

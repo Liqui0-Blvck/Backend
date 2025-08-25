@@ -42,7 +42,7 @@ class Product(BaseModel):
 class PalletType(models.Model):
     uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
     nombre = models.CharField(max_length=64)
-    peso_pallet = models.DecimalField(max_digits=7, decimal_places=2)
+    peso_pallet = models.DecimalField(max_digits=7, decimal_places=2)  # Mantener nombre para compatibilidad
     descripcion = models.TextField(blank=True)
     business = models.ForeignKey('business.Business', on_delete=models.CASCADE)
     
@@ -54,7 +54,7 @@ class BoxType(models.Model):
     nombre = models.CharField(max_length=64)
     descripcion = models.TextField(blank=True)
     peso_caja = models.DecimalField(max_digits=6, decimal_places=2)
-    peso_pallet = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True)
+    capacidad_por_caja = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True)
     business = models.ForeignKey('business.Business', on_delete=models.CASCADE)
 
     def __str__(self):
@@ -64,7 +64,7 @@ class FruitLot(BaseModel):
     uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
     producto = models.ForeignKey('Product', on_delete=models.CASCADE, null=True, blank=True)
     marca = models.CharField(max_length=50, blank=True)
-    proveedor = models.CharField(max_length=64)
+    proveedor = models.ForeignKey('Supplier', on_delete=models.CASCADE, null=True, blank=True)
     procedencia = models.CharField(max_length=64)
     pais = models.CharField(max_length=32)
     

@@ -7,7 +7,7 @@ from decimal import Decimal
 class BoxTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = BoxType
-        fields = ('uid', 'nombre', 'descripcion', 'peso_caja', 'peso_pallet', 'business')
+        fields = ('uid', 'nombre', 'descripcion', 'peso_caja', 'capacidad_por_caja', 'business')
 
 class SupplierSerializer(serializers.ModelSerializer):
     """
@@ -349,21 +349,17 @@ class ProductSerializer(serializers.ModelSerializer):
 class FruitLotListSerializer(serializers.ModelSerializer):
     producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
     tipo_producto = serializers.CharField(source='producto.tipo_producto', read_only=True)
-    resumen_producto = serializers.SerializerMethodField()
-
     # Campos para stock disponible
     cajas_disponibles = serializers.SerializerMethodField()
-    kg_disponibles = serializers.SerializerMethodField()
-    unidades_disponibles = serializers.SerializerMethodField()
     costo_total_pallet = serializers.SerializerMethodField()
+    proveedor = serializers.CharField(source='proveedor.nombre', read_only=True)
 
     class Meta:
         model = FruitLot
         fields = (
             'uid', 'producto', 'producto_nombre', 'tipo_producto', 'calibre', 
-            'cajas_disponibles', 'kg_disponibles', 'unidades_disponibles',
-            'estado_maduracion', 'estado_lote', 'resumen_producto', 'fecha_ingreso', 
-            'procedencia', 'proveedor', 'costo_inicial', 'en_concesion', 'costo_total_pallet'
+            'cajas_disponibles','estado_maduracion', 'estado_lote', 'fecha_ingreso', 
+            'procedencia', 'proveedor', 'costo_inicial', 'en_concesion', 'costo_total_pallet', 'proveedor'
         )
 
     def _get_active_reservations_sum(self, obj):
@@ -381,36 +377,11 @@ class FruitLotListSerializer(serializers.ModelSerializer):
         sums = self._get_active_reservations_sum(obj)
         cajas_reservadas = sums.get('total_cajas') or 0
         return obj.cantidad_cajas - cajas_reservadas
-
-    def get_kg_disponibles(self, obj):
-        if obj.producto.tipo_producto != 'palta':
-            return obj.peso_neto
-        sums = self._get_active_reservations_sum(obj)
-        kg_reservados = sums.get('total_kg') or 0
-        return obj.peso_neto - kg_reservados
-
-    def get_unidades_disponibles(self, obj):
-        if obj.producto.tipo_producto == 'palta':
-            return obj.cantidad_unidades
-        sums = self._get_active_reservations_sum(obj)
-        unidades_reservadas = sums.get('total_unidades') or 0
-        return obj.cantidad_unidades - unidades_reservadas
-
-        return None
     
     def get_tipo_producto(self, obj):
         if obj.producto:
             return obj.producto.tipo_producto
         return 'otro'
-    
-    def get_resumen_producto(self, obj):
-        if not obj.producto:
-            return "Producto no especificado"
-            
-        if obj.producto.tipo_producto == 'palta':
-            return f"{obj.producto.nombre} - {obj.calibre} - {obj.peso_neto}kg"
-        else:
-            return f"{obj.producto.nombre} - {obj.cantidad_cajas} cajas"
     
     def get_costo_total_pallet(self, obj):
         if not obj.producto:
@@ -447,6 +418,7 @@ class FruitLotSerializer(serializers.ModelSerializer):
     porcentaje_vendido = serializers.SerializerMethodField()
     propietario_original_nombre = serializers.SerializerMethodField()
     proveedor_nombre = serializers.SerializerMethodField()
+    proveedor_uid = serializers.SerializerMethodField()
     info_producto = serializers.SerializerMethodField()
     detalles_lote = serializers.SerializerMethodField()
     
@@ -502,11 +474,14 @@ class FruitLotSerializer(serializers.ModelSerializer):
             'producto_nombre', 'box_type_nombre', 'pallet_type_nombre', 'costo_actual', 'proveedor_nombre',
             'dias_desde_ingreso', 'dinero_generado', 'porcentaje_vendido', 'propietario_original_nombre',
             'info_producto', 'cajas_disponibles', 'kg_disponibles', 'peso_disponible', 'peso_reservado', 
-            'unidades_disponibles', 'detalles_lote'
+            'unidades_disponibles', 'detalles_lote', 'proveedor_uid'
         )
 
     def get_proveedor_nombre(self, obj):
-        return obj.proveedor
+        return obj.proveedor.nombre if obj.proveedor else None
+        
+    def get_proveedor_uid(self, obj):
+        return str(obj.proveedor.uid) if obj.proveedor else None
 
     def get_dias_desde_ingreso(self, obj):
         from django.utils import timezone
