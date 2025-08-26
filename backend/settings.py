@@ -24,8 +24,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = 'django-insecure-w0&skl70z0!3fk566d0p9!f1_wfx)ecx3898&h-pjmo=-#q@6*'
 
+
+
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('P_DEBUG', 'True').lower() == 'true'
 
 ALLOWED_HOSTS = [
     'localhost',
@@ -66,6 +68,9 @@ INSTALLED_APPS = [
     
     # Cors
     'corsheaders',
+    
+    # Storage backends (S3/Spaces)
+    'storages',
     
     # Apps
     'accounts',
@@ -119,6 +124,7 @@ ASGI_APPLICATION = 'backend.asgi.application'
 # Detectar si estamos en producción basado en la presencia de variables P_
 IS_PRODUCTION = os.environ.get('P_POSTGRES_DB') is not None
 
+
 if IS_PRODUCTION:
     # Configuración de producción con prefijo P_
     DATABASES = {
@@ -127,10 +133,11 @@ if IS_PRODUCTION:
             'NAME': os.environ.get('P_POSTGRES_DB', 'fruitpos'),
             'USER': os.environ.get('P_POSTGRES_USER', 'fruitpos_user'),
             'PASSWORD': os.environ.get('P_POSTGRES_PASSWORD', ''),
-            'HOST': os.environ.get('P_POSTGRES_HOST', 'localhost'),
-            'PORT': os.environ.get('P_POSTGRES_PORT', '5432'),
+            'HOST': os.environ.get('P_POSTGRES_HOST', ''),
+            'PORT': os.environ.get('P_POSTGRES_PORT', ''),
             'OPTIONS': {
                 'connect_timeout': 60,
+                'sslmode': os.environ.get('P_POSTGRES_SSLMODE', 'require'),
             },
         }
     }
@@ -164,29 +171,30 @@ if IS_PRODUCTION:
         AWS_STORAGE_BUCKET_NAME = os.environ.get('P_SPACES_BUCKET_NAME', 'fruitpost')
         AWS_S3_ENDPOINT_URL = os.environ.get('P_SPACES_ENDPOINT_URL', 'https://sfo3.digitaloceanspaces.com')
         AWS_S3_REGION_NAME = os.environ.get('P_SPACES_REGION', 'sfo3')
+        AWS_S3_SIGNATURE_VERSION = 's3v4'
+        AWS_S3_ADDRESSING_STYLE = 'virtual'
         
         # Configuración de URLs y paths
-        AWS_S3_CUSTOM_DOMAIN = os.environ.get('P_SPACES_CDN_DOMAIN', f'{AWS_STORAGE_BUCKET_NAME}.sfo3.cdn.digitaloceanspaces.com')
+        _raw_domain = os.environ.get('P_SPACES_CDN_DOMAIN', f'{AWS_STORAGE_BUCKET_NAME}.sfo3.cdn.digitaloceanspaces.com')
+        # Normalizar: S3Boto3Storage antepone el protocolo; el custom_domain DEBE ir sin esquema
+        if _raw_domain.startswith('http://') or _raw_domain.startswith('https://'):
+            _raw_domain = _raw_domain.split('://', 1)[1].rstrip('/')
+        AWS_S3_CUSTOM_DOMAIN = _raw_domain
         AWS_LOCATION = 'fruitpost'  # Carpeta base en el bucket
         
         # Configuración de archivos estáticos
         STATICFILES_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
         _domain = AWS_S3_CUSTOM_DOMAIN or ''
-        if _domain.startswith('http://') or _domain.startswith('https://'):
-            STATIC_URL = f'{_domain}/{AWS_LOCATION}/static/'
-        else:
-            STATIC_URL = f'https://{_domain}/{AWS_LOCATION}/static/'
+        STATIC_URL = f'https://{_domain}/{AWS_LOCATION}/static/'
         
         # Configuración de archivos media
         DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
-        if _domain.startswith('http://') or _domain.startswith('https://'):
-            MEDIA_URL = f'{_domain}/{AWS_LOCATION}/media/'
-        else:
-            MEDIA_URL = f'https://{_domain}/{AWS_LOCATION}/media/'
+        MEDIA_URL = f'https://{_domain}/{AWS_LOCATION}/media/'
         
         # Configuraciones adicionales de S3/Spaces
         AWS_S3_OBJECT_PARAMETERS = {
             'CacheControl': 'max-age=86400',  # 1 día de cache
+            'ACL': 'public-read',
         }
         AWS_DEFAULT_ACL = 'public-read'
         AWS_S3_FILE_OVERWRITE = False  # No sobrescribir archivos con el mismo nombre
@@ -196,7 +204,16 @@ if IS_PRODUCTION:
         AWS_STATIC_LOCATION = 'static'
         AWS_MEDIA_LOCATION = 'media'
         
-        # Custom storage classes para separar static y media
+        # Django 4.2+: definir STORAGES explícitamente para asegurar uso de S3
+        STORAGES = {
+            'default': {
+                'BACKEND': 'backend.storage_backends.MediaStorage',
+            },
+            'staticfiles': {
+                'BACKEND': 'backend.storage_backends.StaticStorage',
+            },
+        }
+        # Mantener las variables legacy por compatibilidad
         STATICFILES_STORAGE = 'backend.storage_backends.StaticStorage'
         DEFAULT_FILE_STORAGE = 'backend.storage_backends.MediaStorage'
         
@@ -319,3 +336,19 @@ REST_FRAMEWORK = {
         'django_filters.rest_framework.DjangoFilterBackend',
     ],
 }
+
+# Asegurar backends de almacenamiento en producción con Spaces (override final)
+try:
+    if IS_PRODUCTION and os.environ.get('P_USE_SPACES', 'True').lower() == 'true':
+        STORAGES = {
+            'default': {
+                'BACKEND': 'backend.storage_backends.MediaStorage',
+            },
+            'staticfiles': {
+                'BACKEND': 'backend.storage_backends.StaticStorage',
+            },
+        }
+        STATICFILES_STORAGE = 'backend.storage_backends.StaticStorage'
+        DEFAULT_FILE_STORAGE = 'backend.storage_backends.MediaStorage'
+except Exception:
+    pass

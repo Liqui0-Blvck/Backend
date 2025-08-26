@@ -17,7 +17,7 @@ class BankAccountInline(admin.TabularInline):
 # Admin personalizado para Business
 class BusinessAdmin(admin.ModelAdmin):
     inlines = [BankAccountInline]
-    list_display = ('nombre', 'rut', 'email', 'telefono', 'cuenta_bancaria_count', 'cuentas_activas_count')
+    list_display = ('nombre', 'rut', 'email', 'telefono', 'dueno', 'cuenta_bancaria_count', 'cuentas_activas_count')
     search_fields = ('nombre', 'rut', 'email', 'telefono')
     list_filter = ('created_at',)
     readonly_fields = ('created_at', 'updated_at')
@@ -31,6 +31,21 @@ class BusinessAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
+    
+    def save_model(self, request, obj, form, change):
+        """Asegura que 'dueno' nunca sea nulo al crear desde el admin.
+        Si no se ha especificado, se asigna el Perfil del usuario actual.
+        Crea el Perfil si aún no existe.
+        """
+        if not obj.dueno_id:
+            try:
+                from accounts.models import Perfil
+                perfil, _ = Perfil.objects.get_or_create(user=request.user)
+                obj.dueno = perfil
+            except Exception:
+                # En caso extremo, dejamos que la validación de la BD falle con un error claro
+                pass
+        super().save_model(request, obj, form, change)
     
     def cuenta_bancaria_count(self, obj):
         return obj.bank_accounts.count()
