@@ -1,6 +1,3 @@
-#!/bin/bash
-set -e
-
 # Colores para mensajes
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -13,13 +10,13 @@ export DJANGO_SETTINGS_MODULE=backend.settings
 # Detectar entorno
 if [ "$DJANGO_ENV" = "production" ]; then
     echo -e "${GREEN}Ejecutando en modo PRODUCCIÓN${NC}"
-    
+
     # Verificar variables críticas en producción
     if [ -z "$SECRET_KEY" ]; then
         echo -e "${RED}Error: La variable SECRET_KEY no está configurada. Abortando.${NC}"
         exit 1
     fi
-    
+
     if [ "$USE_SPACES" = "True" ] && ([ -z "$P_SPACES_ACCESS_KEY_ID" ] || [ -z "$P_SPACES_SECRET_ACCESS_KEY" ] || [ -z "$P_SPACES_CDN_DOMAIN" ]); then
         echo -e "${RED}Error: Faltan variables de DigitalOcean Spaces. Verifica P_SPACES_ACCESS_KEY_ID, P_SPACES_SECRET_ACCESS_KEY y P_SPACES_CDN_DOMAIN${NC}"
         exit 1
@@ -39,8 +36,9 @@ done
 echo -e "${GREEN}PostgreSQL está disponible!${NC}"
 echo -e "${GREEN}¡Base de datos lista!${NC}"
 
-# SALTAMOS LAS MIGRACIONES porque ya las aplicamos manualmente
-echo -e "${YELLOW}Saltando migraciones (ya aplicadas manualmente)...${NC}"
+# Aplicar migraciones
+echo -e "${YELLOW}Aplicando migraciones...${NC}"
+python manage.py migrate --noinput
 
 # Collectstatic (solo en producción o si se solicita explícitamente)
 if [ "$DJANGO_ENV" = "production" ] || [ "$COLLECT_STATIC" = "True" ]; then
@@ -52,6 +50,12 @@ fi
 echo -e "${GREEN}Iniciando servidor con DJANGO_SETTINGS_MODULE=$DJANGO_SETTINGS_MODULE${NC}"
 echo -e "${GREEN}Entorno: $DJANGO_ENV${NC}"
 
-# Iniciar Daphne para ambos entornos
-echo -e "${GREEN}Iniciando Daphne...${NC}"
-exec daphne -b 0.0.0.0 -p 8000 backend.asgi:application
+# Ejecutar el comando que se pasa como argumento o iniciar Daphne por defecto
+if [ $# -gt 0 ]; then
+    echo -e "${GREEN}Ejecutando comando: $@${NC}"
+    exec "$@"
+else
+    # Iniciar Daphne para ambos entornos
+    echo -e "${GREEN}Iniciando Daphne...${NC}"
+    exec daphne -b 0.0.0.0 -p 8000 backend.asgi:application
+fi
