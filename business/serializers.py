@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import Business, BusinessConfig
+from accounts.models import Perfil
 from .serializers_banking import BankAccountNestedSerializer
 
 class BusinessSerializer(serializers.ModelSerializer):
@@ -13,6 +14,12 @@ class BusinessSerializer(serializers.ModelSerializer):
         """Devuelve las cuentas bancarias activas del negocio"""
         accounts = obj.bank_accounts.filter(activa=True).order_by('orden')
         return BankAccountNestedSerializer(accounts, many=True).data
+
+    def create(self, validated_data):
+        """Requiere que 'dueno' venga explícitamente en el payload."""
+        if 'dueno' not in validated_data or validated_data.get('dueno') is None:
+            raise serializers.ValidationError({'dueno': 'Debes especificar el dueño (Perfil) del negocio.'})
+        return super().create(validated_data)
 
 class BusinessConfigSerializer(serializers.ModelSerializer):
     user_email = serializers.SerializerMethodField()

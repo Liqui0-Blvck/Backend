@@ -5,6 +5,7 @@ from .models import Business, BusinessConfig
 from .serializers import BusinessSerializer, BusinessConfigSerializer
 from rest_framework.permissions import IsAuthenticated
 from core.permissions import IsSameBusiness
+from django.db.models import Q
 
 class BusinessViewSet(viewsets.ModelViewSet):
     queryset = Business.objects.all()
@@ -12,8 +13,14 @@ class BusinessViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsSameBusiness]
     
     def get_queryset(self):
-        # Un admin puede ver solo su empresa
-        return Business.objects.filter(id=self.request.user.business_id)
+        # Un usuario puede ver su empresa asociada en perfil y/o negocios donde es dueño
+        user = self.request.user
+        if hasattr(user, 'perfil') and user.perfil:
+            perfil = user.perfil
+            return Business.objects.filter(Q(id=getattr(perfil, 'business_id', None)) | Q(dueno=perfil)).distinct()
+        return Business.objects.none()
+
+    # La creación exige 'dueno' explícito desde el serializer; no lo sobreescribimos aquí.
 
 
 class BusinessConfigViewSet(viewsets.ModelViewSet):
