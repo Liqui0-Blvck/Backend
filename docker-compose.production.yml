@@ -37,6 +37,8 @@ services:
       - "8000"
     depends_on:
       - redis
+    env_file:
+      - .env.production
     environment:
       # Configuración básica de Django
       DJANGO_SETTINGS_MODULE: backend.settings
@@ -46,27 +48,18 @@ services:
       MEDIA_ROOT: /app/media
       MEDIA_URL: /media/
       
-      # Base de datos (producción con prefijo P_)
-      P_POSTGRES_DB: ${P_POSTGRES_DB:-fruitpos_prod}
-      P_POSTGRES_USER: ${P_POSTGRES_USER:-fruitpos_prod_user}
-      P_POSTGRES_PASSWORD: ${P_POSTGRES_PASSWORD}
-      P_POSTGRES_HOST: ${P_POSTGRES_HOST:-db}
-      P_POSTGRES_PORT: ${P_POSTGRES_PORT:-5432}
+      # Base de datos (producción con prefijo P_) -> se cargan desde env_file .env.production
       
       # Redis (producción)
       P_REDIS_URL: ${P_REDIS_URL:-redis://redis:6379/0}
       
       # DigitalOcean Spaces (OBLIGATORIO en producción) - VALORES REALES DEL USUARIO
-      P_USE_SPACES: ${P_USE_SPACES:-True}
-      P_SPACES_ACCESS_KEY_ID: ${P_SPACES_ACCESS_KEY_ID}
-      P_SPACES_SECRET_ACCESS_KEY: ${P_SPACES_SECRET_ACCESS_KEY}
-      P_SPACES_BUCKET_NAME: ${P_SPACES_BUCKET_NAME:-fruitpost}
-      P_SPACES_ENDPOINT_URL: ${P_SPACES_ENDPOINT_URL:-https://sfo3.digitaloceanspaces.com}
-      P_SPACES_REGION: ${P_SPACES_REGION:-sfo3}
-      P_SPACES_CDN_DOMAIN: ${P_SPACES_CDN_DOMAIN:-fruitpost.sfo3.cdn.digitaloceanspaces.com}
+      # IMPORTANTE: estas variables vienen desde env_file (.env.production). No sobreescribir aquí.
+      # P_USE_SPACES, P_SPACES_ACCESS_KEY_ID, P_SPACES_SECRET_ACCESS_KEY,
+      # P_SPACES_BUCKET_NAME, P_SPACES_ENDPOINT_URL, P_SPACES_REGION, P_SPACES_CDN_DOMAIN
       
       # CORS para producción
-      P_CORS_ALLOWED_ORIGINS: ${P_CORS_ALLOWED_ORIGINS:-https://fruitpos.cl,https://www.fruitpos.cl}
+      P_CORS_ALLOWED_ORIGINS: ${P_CORS_ALLOWED_ORIGINS:-https://app.fruitpos.cl,https://www.app.fruitpos.cl}
       
       # Configuración de seguridad
       P_SECURE_SSL_REDIRECT: ${P_SECURE_SSL_REDIRECT:-True}
@@ -91,7 +84,7 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       
       # Hosts permitidos
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-fruitpos.cl,www.fruitpos.cl,api.fruitpos.cl}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-app.fruitpos.cl,www.app.fruitpos.cl,api.app.fruitpos.cl}
 
   nginx:
     image: nginx:1.25-alpine
@@ -102,11 +95,12 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./ssl:/etc/nginx/ssl:ro  # Certificados SSL
+      - ./certbot:/var/www/certbot:ro  # Webroot para Let's Encrypt (certbot webroot en el host)
       # NO montar static/media porque se sirven desde DigitalOcean Spaces
     depends_on:
       - api
     environment:
-      - NGINX_HOST=fruitpos.cl
+      - NGINX_HOST=app.fruitpos.cl
       - NGINX_PORT=443
     # Configuración de salud para nginx
     healthcheck:
@@ -121,21 +115,13 @@ services:
     command: ["python", "manage.py", "collectstatic", "--noinput"]
     volumes:
       - ./logs:/app/logs
+    env_file:
+      - .env.production
     environment:
       # Mismas variables que api para acceder a Spaces
       DJANGO_SETTINGS_MODULE: backend.settings
-      P_POSTGRES_DB: ${P_POSTGRES_DB:-fruitpos_prod}
-      P_POSTGRES_USER: ${P_POSTGRES_USER:-fruitpos_prod_user}
-      P_POSTGRES_PASSWORD: ${P_POSTGRES_PASSWORD}
-      P_POSTGRES_HOST: ${P_POSTGRES_HOST:-db}
-      P_POSTGRES_PORT: ${P_POSTGRES_PORT:-5432}
-      P_USE_SPACES: ${P_USE_SPACES:-True}
-      P_SPACES_ACCESS_KEY_ID: ${P_SPACES_ACCESS_KEY_ID}
-      P_SPACES_SECRET_ACCESS_KEY: ${P_SPACES_SECRET_ACCESS_KEY}
-      P_SPACES_BUCKET_NAME: ${P_SPACES_BUCKET_NAME:-fruitpost}
-      P_SPACES_ENDPOINT_URL: ${P_SPACES_ENDPOINT_URL:-https://sfo3.digitaloceanspaces.com}
-      P_SPACES_REGION: ${P_SPACES_REGION:-sfo3}
-      P_SPACES_CDN_DOMAIN: ${P_SPACES_CDN_DOMAIN}
+      # Variables de DB se leen desde env_file .env.production
+      # IMPORTANTE: variables P_SPACES_* vienen desde env_file (.env.production)
       SECRET_KEY: ${SECRET_KEY}
       DEBUG: "False"
     profiles:
