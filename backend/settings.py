@@ -152,7 +152,7 @@ if IS_PRODUCTION:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     
     # CORS para producción
-    CORS_ALLOWED_ORIGINS = os.environ.get('P_CORS_ALLOWED_ORIGINS', 'https://fruitpos.cl,https://www.fruitpos.cl').split(',')
+    CORS_ALLOWED_ORIGINS = os.environ.get('P_CORS_ALLOWED_ORIGINS', 'https://app.fruitpos.cl,https://www.app.fruitpos.cl').split(',')
     
     # DigitalOcean Spaces Configuration para producción
     USE_SPACES = os.environ.get('P_USE_SPACES', 'True').lower() == 'true'
@@ -167,15 +167,22 @@ if IS_PRODUCTION:
         
         # Configuración de URLs y paths
         AWS_S3_CUSTOM_DOMAIN = os.environ.get('P_SPACES_CDN_DOMAIN', f'{AWS_STORAGE_BUCKET_NAME}.sfo3.cdn.digitaloceanspaces.com')
-        AWS_LOCATION = 'fruitpos'  # Carpeta base en el bucket
+        AWS_LOCATION = 'fruitpost'  # Carpeta base en el bucket
         
         # Configuración de archivos estáticos
         STATICFILES_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
-        STATIC_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/{AWS_LOCATION}/static/'
+        _domain = AWS_S3_CUSTOM_DOMAIN or ''
+        if _domain.startswith('http://') or _domain.startswith('https://'):
+            STATIC_URL = f'{_domain}/{AWS_LOCATION}/static/'
+        else:
+            STATIC_URL = f'https://{_domain}/{AWS_LOCATION}/static/'
         
         # Configuración de archivos media
         DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
-        MEDIA_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/{AWS_LOCATION}/media/'
+        if _domain.startswith('http://') or _domain.startswith('https://'):
+            MEDIA_URL = f'{_domain}/{AWS_LOCATION}/media/'
+        else:
+            MEDIA_URL = f'https://{_domain}/{AWS_LOCATION}/media/'
         
         # Configuraciones adicionales de S3/Spaces
         AWS_S3_OBJECT_PARAMETERS = {
@@ -216,11 +223,12 @@ else:
     }
 
     REDIS_URL = os.environ.get('REDIS_URL', 'redis://redis:6379/0')
-    
+        
     # CORS para desarrollo
     CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173').split(',')
     
     # Archivos estáticos para desarrollo (almacenamiento local)
+    STATIC_URL = '/static/'
     STATIC_ROOT = os.environ.get('STATIC_ROOT', os.path.join(BASE_DIR, 'static'))
     MEDIA_ROOT = os.environ.get('MEDIA_ROOT', os.path.join(BASE_DIR, 'media'))
     MEDIA_URL = '/media/'
@@ -260,18 +268,17 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
-STATIC_URL = 'static/'
-
 # Channels y Redis
-import os
 
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "http://fruitpos.cl",
-    "https://fruitpos.cl",
+    "http://app.fruitpos.cl",
+    "https://app.fruitpos.cl",
+    "http://api.fruitpos.cl",
+    "https://api.fruitpos.cl",
 ]
 
 # Desactivando completamente la configuración CORS en Django ya que se maneja en Nginx
