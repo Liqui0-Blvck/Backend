@@ -371,12 +371,13 @@ class FruitLotListSerializer(serializers.ModelSerializer):
     cajas_disponibles = serializers.SerializerMethodField()
     costo_total_pallet = serializers.SerializerMethodField()
     proveedor = serializers.CharField(source='proveedor.nombre', read_only=True)
+    peso_reservado = serializers.SerializerMethodField()
 
     class Meta:
         model = FruitLot
         fields = (
-            'uid', 'producto', 'producto_nombre', 'tipo_producto', 'calibre', 
-            'cajas_disponibles','estado_maduracion', 'estado_lote', 'fecha_ingreso', 
+            'uid', 'producto', 'producto_nombre', 'tipo_producto', 'calibre',
+            'peso_bruto', 'peso_neto', 'peso_reservado', 'cajas_disponibles','estado_maduracion', 'estado_lote', 'fecha_ingreso', 
             'procedencia', 'proveedor', 'costo_inicial', 'en_concesion', 'costo_total_pallet', 'proveedor'
         )
 
@@ -396,6 +397,13 @@ class FruitLotListSerializer(serializers.ModelSerializer):
         cajas_reservadas = sums.get('total_cajas') or 0
         return obj.cantidad_cajas - cajas_reservadas
     
+    def get_peso_reservado(self, obj):
+        # Solo aplica para productos tipo palta
+        if not obj.producto or obj.producto.tipo_producto != 'palta':
+            return 0
+        sums = self._get_active_reservations_sum(obj)
+        return float(sums.get('total_kg') or 0)
+    
     def get_tipo_producto(self, obj):
         if obj.producto:
             return obj.producto.tipo_producto
@@ -407,11 +415,13 @@ class FruitLotListSerializer(serializers.ModelSerializer):
         
         # Acceder al tipo_producto a través de la relación con el producto.
         if obj.producto.tipo_producto == 'palta':
-            costo_actual = obj.costo_actualizado()
-            peso_neto = obj.peso_neto or 0
-            return float(peso_neto) * float(costo_actual)
+            # Usar el peso neto INICIAL del pallet y el costo unitario inicial
+            peso_inicial = self.get_peso_neto_inicial(obj)
+            costo_unitario_inicial = obj.costo_inicial or 0
+            return float(peso_inicial) * float(costo_unitario_inicial)
         else:
-            cantidad_cajas = obj.cantidad_cajas or 0
+            # Usar la cantidad de cajas INICIAL al crear el pallet
+            cantidad_cajas = self.get_cantidad_cajas_inicial(obj)
             costo_inicial = obj.costo_inicial or 0
             return float(cantidad_cajas) * float(costo_inicial)
 
@@ -423,6 +433,28 @@ class FruitLotListSerializer(serializers.ModelSerializer):
             return obj.peso_disponible()
         else:
             return obj.unidades_disponibles()
+
+    def get_cantidad_cajas_inicial(self, obj):
+        """Cantidad de cajas al momento de creación del pallet, desde el primer snapshot del historial."""
+        try:
+            historial = obj.history.all().order_by('history_date')
+            if historial.exists():
+                primero = historial.first()
+                return int(getattr(primero, 'cantidad_cajas', obj.cantidad_cajas) or 0)
+        except Exception:
+            pass
+        return int(obj.cantidad_cajas or 0)
+
+    def get_peso_neto_inicial(self, obj):
+        """Peso neto al momento de creación del pallet, desde el primer snapshot del historial."""
+        try:
+            historial = obj.history.all().order_by('history_date')
+            if historial.exists():
+                primero = historial.first()
+                return float(getattr(primero, 'peso_neto', obj.peso_neto) or 0)
+        except Exception:
+            pass
+        return float(obj.peso_neto or 0)
 
 class FruitLotSerializer(serializers.ModelSerializer):
     producto_nombre = serializers.SerializerMethodField()
