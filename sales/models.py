@@ -339,7 +339,25 @@ class SaleItem(BaseModel):
                     if self.peso_vendido > 0:
                         logger.info(f"SaleItem.save: Peso neto antes: {self.lote.peso_neto}")
                         logger.info(f"SaleItem.save: Peso vendido: {self.peso_vendido}")
-                        self.lote.peso_neto = max(0, self.lote.peso_neto - self.peso_vendido)
+                        # Asegurar aritmética con Decimal para evitar TypeError con floats
+                        try:
+                            from decimal import Decimal as D
+                        except Exception:
+                            # Fallback improbable, pero mantiene el flujo si hubiera problema con import
+                            from decimal import Decimal as D
+                        peso_actual = self.lote.peso_neto if self.lote.peso_neto is not None else D('0')
+                        # Convertir peso_vendido de forma segura a Decimal
+                        if isinstance(self.peso_vendido, (float, int)):
+                            peso_vendido_dec = D(str(self.peso_vendido))
+                        else:
+                            try:
+                                peso_vendido_dec = D(self.peso_vendido)
+                            except Exception:
+                                peso_vendido_dec = D(str(self.peso_vendido))
+                        nuevo_peso = peso_actual - peso_vendido_dec
+                        if nuevo_peso < D('0'):
+                            nuevo_peso = D('0')
+                        self.lote.peso_neto = nuevo_peso
                         logger.info(f"SaleItem.save: Peso neto después: {self.lote.peso_neto}")
                         
                 # Para todos los productos, actualizar cajas

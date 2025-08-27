@@ -86,9 +86,12 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
         }
     
     def get_inventario(self, obj):
+        inicial = self.get_cantidad_cajas_inicial(obj)
+        actual = self.get_cantidad_cajas_actual(obj)
         return {
-            'cantidad_cajas_inicial': obj.cantidad_cajas,
-            'cantidad_cajas_actual': self.get_cantidad_cajas_actual(obj),
+            'cantidad_cajas_inicial': inicial,
+            'cantidad_cajas_actual': actual,
+            'cajas_vendidas': max(0, int(inicial) - int(actual)),
             'box_type': obj.box_type.nombre if obj.box_type else None,
             'pallet_type': self.get_pallet_type(obj),
             'peso_bruto': obj.peso_bruto,
@@ -172,6 +175,18 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
         # Este método podría ser modificado para calcular la cantidad actual
         # basado en ventas u otros movimientos
         return obj.cantidad_cajas
+
+    def get_cantidad_cajas_inicial(self, obj):
+        """Cantidad de cajas al momento de creación del pallet, obtenida del primer registro histórico."""
+        try:
+            historicos = obj.history.all().order_by('history_date')
+            if historicos.exists():
+                primero = historicos.first()
+                return int(getattr(primero, 'cantidad_cajas', obj.cantidad_cajas) or 0)
+        except Exception:
+            pass
+        # Fallback: si no hay historial, usar el valor actual
+        return int(obj.cantidad_cajas or 0)
         
     def get_cantidad_inicial_kg(self, obj):
         tipo = self.get_tipo_producto(obj)
@@ -224,12 +239,17 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
 
     def get_dias_en_inventario(self, obj):
         if obj.fecha_ingreso:
-            return (date.today() - obj.fecha_ingreso).days
+            # Usar fecha local para evitar negativos por desfase horario y asegurar mínimo 0
+            today_local = timezone.localdate()
+            dias = (today_local - obj.fecha_ingreso).days
+            return dias if dias >= 0 else 0
         return 0
 
     def get_dias_desde_ingreso(self, obj):
         if obj.fecha_ingreso:
-            return (date.today() - obj.fecha_ingreso).days
+            today_local = timezone.localdate()
+            dias = (today_local - obj.fecha_ingreso).days
+            return dias if dias >= 0 else 0
         return 0
 
     def get_dias_en_bodega(self, obj):
@@ -328,28 +348,45 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
         - Otros: por caja (usa cantidad de cajas y precio por caja).
         """
         tipo = self.get_tipo_producto(obj)
-        # Palta por kilos
+        # Obtener valores iniciales preferentemente del historial
+        try:
+            historial = obj.history.all().order_by('history_date')
+            if historial.exists():
+                primer = historial.first()
+                peso_inicial = float(getattr(primer, 'peso_neto', 0) or 0)
+                cajas_iniciales = float(getattr(primer, 'cantidad_cajas', 0) or 0)
+                costo_inicial = float(getattr(primer, 'costo_inicial', 0) or 0)
+            else:
+                peso_inicial = float(obj.peso_neto or 0)
+                cajas_iniciales = float(obj.cantidad_cajas or 0)
+                costo_inicial = float(obj.costo_inicial or 0)
+        except Exception:
+            peso_inicial = float(obj.peso_neto or 0)
+            cajas_iniciales = float(obj.cantidad_cajas or 0)
+            costo_inicial = float(obj.costo_inicial or 0)
+
+        # Calcular precio promedio real de ventas (si existe)
+        from sales.models import SaleItem
+        items = SaleItem.objects.filter(lote=obj)
         if tipo == 'palta':
-            try:
-                historial = obj.history.all().order_by('history_date')
-                if historial.exists():
-                    # Mantener como referencia inicial si hay historial
-                    primer_registro = historial.first()
-                    peso_inicial = float(getattr(primer_registro, 'peso_neto', 0) or 0)
-                    costo_inicial = float(getattr(primer_registro, 'costo_inicial', 0) or 0)
-                    precio_recomendado = round(costo_inicial * 1.3, 2)
-                    return round(precio_recomendado * peso_inicial, 2)
-            except Exception:
-                pass
-            # Cálculo con valores actuales
-            peso_real = self.get_peso_vendible(obj)
-            return round(self.get_precio_recomendado_kg(obj) * peso_real, 2)
-        
-        # Otros productos por caja
-        cantidad_cajas = float(obj.cantidad_cajas or 0)
-        costo_por_caja = float(obj.costo_inicial or 0)
-        precio_recomendado_caja = round(costo_por_caja * 1.3, 2)
-        return round(precio_recomendado_caja * cantidad_cajas, 2)
+            vendido = sum(float(it.peso_vendido or 0) for it in items)
+        else:
+            vendido = sum(float(it.unidades_vendidas or 0) for it in items)
+        monto = sum(float(it.subtotal or 0) for it in items)
+        precio_promedio_real = round(monto / vendido, 2) if vendido > 0 else None
+
+        if tipo == 'palta':
+            # Ingreso estimado con precio promedio real si existe, si no usar precio recomendado
+            precio_ref = precio_promedio_real if precio_promedio_real is not None else self.get_precio_recomendado_kg(obj)
+            cantidad_ref = max(peso_inicial, 0)
+            return round(precio_ref * cantidad_ref, 2)
+        else:
+            # Para otros productos considerar precio por unidad/caja
+            # Asumimos costo_inicial es por caja y sugerido 1.3x
+            precio_sugerido_caja = round(float(obj.costo_inicial or costo_inicial) * 1.3, 2)
+            precio_ref = precio_promedio_real if precio_promedio_real is not None else precio_sugerido_caja
+            cantidad_ref = max(cajas_iniciales, 0)
+            return round(precio_ref * cantidad_ref, 2)
 
     def get_ganancia_total(self, obj):
         """
@@ -358,27 +395,48 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
         - Otros: por caja.
         """
         tipo = self.get_tipo_producto(obj)
+        # Valores iniciales
+        try:
+            historial = obj.history.all().order_by('history_date')
+            if historial.exists():
+                primer = historial.first()
+                peso_inicial = float(getattr(primer, 'peso_neto', 0) or 0)
+                cajas_iniciales = float(getattr(primer, 'cantidad_cajas', 0) or 0)
+                costo_inicial = float(getattr(primer, 'costo_inicial', 0) or 0)
+            else:
+                peso_inicial = float(obj.peso_neto or 0)
+                cajas_iniciales = float(obj.cantidad_cajas or 0)
+                costo_inicial = float(obj.costo_inicial or 0)
+        except Exception:
+            peso_inicial = float(obj.peso_neto or 0)
+            cajas_iniciales = float(obj.cantidad_cajas or 0)
+            costo_inicial = float(obj.costo_inicial or 0)
+
+        # Precio promedio real
+        from sales.models import SaleItem
+        items = SaleItem.objects.filter(lote=obj)
         if tipo == 'palta':
-            try:
-                historial = obj.history.all().order_by('history_date')
-                if historial.exists():
-                    primer_registro = historial.first()
-                    peso_inicial = float(getattr(primer_registro, 'peso_neto', 0) or 0)
-                    costo_inicial = float(getattr(primer_registro, 'costo_inicial', 0) or 0)
-                    precio_recomendado = round(costo_inicial * 1.3, 2)
-                    ganancia_kg = precio_recomendado - costo_inicial
-                    return round(ganancia_kg * peso_inicial, 2)
-            except Exception:
-                pass
-            peso_real = self.get_peso_vendible(obj)
-            return round(self.get_ganancia_kg(obj) * peso_real, 2)
-        
-        # Otros productos por caja
-        cantidad_cajas = float(obj.cantidad_cajas or 0)
-        costo_por_caja = float(obj.costo_inicial or 0)
-        precio_recomendado_caja = round(costo_por_caja * 1.3, 2)
-        ganancia_por_caja = precio_recomendado_caja - costo_por_caja
-        return round(ganancia_por_caja * cantidad_cajas, 2)
+            vendido = sum(float(it.peso_vendido or 0) for it in items)
+        else:
+            vendido = sum(float(it.unidades_vendidas or 0) for it in items)
+        monto = sum(float(it.subtotal or 0) for it in items)
+        precio_promedio_real = round(monto / vendido, 2) if vendido > 0 else None
+
+        if tipo == 'palta':
+            # Para palta, costo_inicial es costo unitario por kg (ver models.GoodsReception.actualizar_totales())
+            costo_por_kg = float(costo_inicial or 0)
+            precio_referencia = precio_promedio_real if precio_promedio_real is not None else self.get_precio_recomendado_kg(obj)
+            ganancia_kg = round(precio_referencia - costo_por_kg, 2)
+            cantidad_ref = max(peso_inicial, 0)
+            return round(ganancia_kg * cantidad_ref, 2)
+        else:
+            # Otros: por caja/unidad
+            costo_por_unidad = float(costo_inicial or 0)
+            precio_sugerido_unidad = round(costo_por_unidad * 1.3, 2) if costo_por_unidad > 0 else 0
+            precio_referencia = precio_promedio_real if precio_promedio_real is not None else precio_sugerido_unidad
+            ganancia_unidad = round(precio_referencia - costo_por_unidad, 2)
+            cantidad_ref = max(cajas_iniciales, 0)
+            return round(ganancia_unidad * cantidad_ref, 2)
 
     def get_urgencia_venta(self, obj):
         estado = getattr(obj, 'estado_maduracion', 'verde')
@@ -548,24 +606,42 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
             # Formatear el nombre del cliente
             nombre_cliente = item.venta.cliente.nombre if item.venta.cliente else getattr(item.venta, 'nombre_cliente', 'Cliente no especificado')
             
-            # Formatear el precio y peso para mejor legibilidad
-            precio = float(item.precio_kg) if item.precio_kg else 0
-            peso_vendido = float(item.peso_vendido) if item.peso_vendido else 0
-            
-            historial.append({
+            # Elegir campos según tipo de producto
+            tipo = self.get_tipo_producto(obj)
+            if tipo == 'palta':
+                precio = float(item.precio_kg or 0)
+                cantidad = float(item.peso_vendido or 0)
+                unidad_sufijo = '/kg'
+                cantidad_clave = 'peso_vendido'
+                cantidad_formateada = f"{cantidad:,.2f} kg"
+            else:
+                precio = float(item.precio_unidad or 0)
+                cantidad = float(item.unidades_vendidas or 0)
+                unidad_sufijo = '/unidad'
+                cantidad_clave = 'unidades_vendidas'
+                cantidad_formateada = f"{int(cantidad):,} unid".replace(',', '.')
+
+            subtotal_real = float(item.subtotal or 0)
+
+            registro = {
                 'id': i + 1,
                 'fecha': item.venta.created_at.isoformat() if hasattr(item.venta.created_at, 'isoformat') else str(item.venta.created_at),
                 'precio': precio,
-                'precio_formateado': f"${precio:,.0f}/kg",
-                'peso_vendido': peso_vendido,
-                'peso_formateado': f"{peso_vendido:,.2f} kg",
-                'subtotal': precio * peso_vendido,
-                'subtotal_formateado': f"${precio * peso_vendido:,.0f}",
+                'precio_formateado': f"${precio:,.0f}{unidad_sufijo}",
+                cantidad_clave: cantidad,
+                'peso_vendido': cantidad if tipo == 'palta' else None,
+                'peso_formateado': f"{cantidad:,.2f} kg" if tipo == 'palta' else None,
+                'cantidad_unidades': int(cantidad) if tipo != 'palta' else None,
+                'cantidad_unidades_formateada': cantidad_formateada if tipo != 'palta' else None,
+                'subtotal': subtotal_real,
+                'subtotal_formateado': f"${subtotal_real:,.0f}",
                 'tipo': 'Venta',
                 'tipo_codigo': 'venta',
                 'usuario': nombre_usuario,
                 'notas': f"Venta #{item.venta.id} - {nombre_cliente}"
-            })
+            }
+
+            historial.append(registro)
         
         # Si no hay ventas, agregar al menos el precio recomendado actual
         if not historial:
@@ -591,83 +667,87 @@ class FruitLotDetailSerializer(serializers.ModelSerializer):
         """
         Compara los valores iniciales del pallet con los valores de venta total.
         """
-        # Obtener ventas para calcular totales
-        from sales.models import Sale
-        ventas = Sale.objects.filter(items__lote=obj).distinct()
-        
-        # Calcular totales de venta con redondeo adecuado
+        # Calcular totales de venta según tipo de producto
         from sales.models import SaleItem
+        tipo = self.get_tipo_producto(obj)
+
         items_lote = SaleItem.objects.filter(lote=obj)
-        peso_total_vendido = round(sum(float(item.peso_vendido) for item in items_lote), 2)
-        monto_total_ventas = round(sum(float(item.subtotal) for item in items_lote), 2)
-        precio_promedio_kg = round(monto_total_ventas / peso_total_vendido, 2) if peso_total_vendido > 0 else 0
-        
-        # Obtener valores iniciales del historial
+
+        # Obtener valores iniciales desde el historial (preferente)
         try:
             historial = obj.history.all().order_by('history_date')
             if historial.exists():
                 primer_registro = historial.first()
                 peso_neto_inicial = float(getattr(primer_registro, 'peso_neto', 0) or 0)
+                cajas_iniciales = float(getattr(primer_registro, 'cantidad_cajas', 0) or 0)
                 costo_inicial = float(getattr(primer_registro, 'costo_inicial', 0) or 0)
             else:
-                # Fallback a valores actuales
                 peso_neto_inicial = float(obj.peso_neto or 0)
+                cajas_iniciales = float(obj.cantidad_cajas or 0)
                 costo_inicial = float(obj.costo_inicial or 0)
         except Exception:
-            # Fallback a valores actuales en caso de error
             peso_neto_inicial = float(obj.peso_neto or 0)
+            cajas_iniciales = float(obj.cantidad_cajas or 0)
             costo_inicial = float(obj.costo_inicial or 0)
-        
-        # Evitar división por cero
-        if peso_neto_inicial <= 0:
-            peso_neto_inicial = 1  # Valor mínimo para evitar división por cero
-        
-        # Calcular porcentajes y valores derivados
-        porcentaje_vendido = round((peso_total_vendido / peso_neto_inicial) * 100, 2) if peso_neto_inicial > 0 else 0
-        valor_total_inicial = round(costo_inicial, 2)
+
+        if tipo == 'palta':
+            cantidad_vendida = round(sum(float(item.peso_vendido or 0) for item in items_lote), 2)
+            cantidad_inicial = max(peso_neto_inicial, 0)
+        else:
+            cantidad_vendida = round(sum(float(item.unidades_vendidas or 0) for item in items_lote), 2)
+            cantidad_inicial = max(cajas_iniciales, 0)
+
+        monto_total_ventas = round(sum(float(item.subtotal or 0) for item in items_lote), 2)
+        precio_promedio = round(monto_total_ventas / cantidad_vendida, 2) if cantidad_vendida > 0 else 0
+
+        # Evitar división por cero y valores negativos por desfase
+        if cantidad_inicial <= 0:
+            cantidad_inicial = 1
+
+        # Costo por unidad inicial
+        costo_por_unidad = round((costo_inicial / (peso_neto_inicial if tipo == 'palta' else cajas_iniciales)), 2) if (peso_neto_inicial if tipo == 'palta' else cajas_iniciales) > 0 else 0
+
+        porcentaje_vendido = round((cantidad_vendida / cantidad_inicial) * 100, 2)
+        porcentaje_vendido = max(min(porcentaje_vendido, 100), 0)
+
+        valor_total_inicial = round(costo_por_unidad * cantidad_inicial, 2)
         valor_vendido = round(monto_total_ventas, 2)
         diferencia_valor = round(valor_vendido - valor_total_inicial, 2)
         porcentaje_diferencia = round((diferencia_valor / valor_total_inicial) * 100, 2) if valor_total_inicial > 0 else 0
-        
-        # Calcular costo por kg con validación
-        costo_por_kg = round(costo_inicial / peso_neto_inicial, 2) if peso_neto_inicial > 0 else 0
-        
-        # Calcular diferencias y porcentajes con límites razonables
-        diferencia_precio = round(precio_promedio_kg - costo_por_kg, 2)
-        
-        # Calcular porcentaje de margen con límites razonables
-        if costo_por_kg > 0:
-            porcentaje_margen = round((diferencia_precio / costo_por_kg) * 100, 2)
-            # Limitar a un rango razonable para presentación (-100% a 1000%)
+
+        diferencia_precio = round(precio_promedio - costo_por_unidad, 2)
+        if costo_por_unidad > 0:
+            porcentaje_margen = round((diferencia_precio / costo_por_unidad) * 100, 2)
             porcentaje_margen = max(min(porcentaje_margen, 1000), -100)
         else:
             porcentaje_margen = 0
-        
-        # Calcular porcentaje vendido con límites razonables
-        porcentaje_vendido = round((peso_total_vendido / peso_neto_inicial) * 100, 2)
-        # Limitar a un máximo de 100% para presentación normal
-        porcentaje_vendido = min(porcentaje_vendido, 100)
-        
-        # Calcular ganancia total de ventas reales (monto total de ventas - costo total del pallet)
-        costo_total_pallet = float(round(obj.costo_actualizado() * obj.peso_neto, 2))  # Costo total inicial del pallet
-        ganancia_total_ventas = round(float(monto_total_ventas) - costo_total_pallet, 2)
-        
-        return {
+
+        # Ganancia total basada en costo inicial total del pallet
+        costo_total_pallet = round(costo_por_unidad * cantidad_inicial, 2)
+        ganancia_total_ventas = round(valor_vendido - costo_total_pallet, 2)
+
+        respuesta = {
             'porcentaje_vendido': porcentaje_vendido,
-            'peso_vendido': peso_total_vendido,
-            'peso_inicial': peso_neto_inicial,
+            'peso_vendido': cantidad_vendida if tipo == 'palta' else None,
+            'peso_inicial': peso_neto_inicial if tipo == 'palta' else None,
+            'unidades_vendidas': cantidad_vendida if tipo != 'palta' else None,
+            'unidades_iniciales': cajas_iniciales if tipo != 'palta' else None,
             'valor_inicial': valor_total_inicial,
             'valor_vendido': valor_vendido,
             'diferencia_valor': diferencia_valor,
             'porcentaje_diferencia': porcentaje_diferencia,
-            'precio_promedio_kg': precio_promedio_kg,
-            'costo_por_kg': costo_por_kg,
+            'precio_promedio_kg': precio_promedio if tipo == 'palta' else None,
+            'precio_promedio_unidad': precio_promedio if tipo != 'palta' else None,
+            'costo_por_kg': costo_por_unidad if tipo == 'palta' else None,
+            'costo_por_unidad': costo_por_unidad if tipo != 'palta' else None,
             'diferencia_precio': diferencia_precio,
             'porcentaje_margen': porcentaje_margen,
             'rentabilidad': 'positiva' if diferencia_precio > 0 else 'negativa' if diferencia_precio < 0 else 'neutra',
-            'precio_dentro_rango': self._precio_dentro_rango(precio_promedio_kg, obj),
-            'analisis': self._generar_analisis_venta(precio_promedio_kg, costo_por_kg, porcentaje_vendido, obj)
+            'precio_dentro_rango': self._precio_dentro_rango(precio_promedio, obj),
+            'analisis': self._generar_analisis_venta(precio_promedio, costo_por_unidad, porcentaje_vendido, obj)
         }
+
+        return respuesta
         
     def _precio_dentro_rango(self, precio_promedio, obj):
         """
