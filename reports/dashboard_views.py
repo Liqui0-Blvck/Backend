@@ -316,13 +316,27 @@ class DashboardSummaryView(APIView):
                 rellenos_eventos = getattr(t, 'box_refills', None)
                 if rellenos_eventos is not None:
                     rellenos_data = rellenos_eventos.aggregate(eventos=Count('id'), cajas_totales=Coalesce(Sum('cantidad_cajas'), 0))
-                else:
-                    rellenos_data = {"eventos": 0, "cajas_totales": 0}
-
                 expenses_mgr = getattr(t, 'expenses', None)
                 if expenses_mgr is not None:
-                    gastos_total = expenses_mgr.aggregate(monto_total=Coalesce(Sum('monto'), 0), cantidad=Count('id'))
-                    gastos_por_categoria_qs = expenses_mgr.values('categoria').annotate(monto=Coalesce(Sum('monto'), 0)).order_by()
+                    gastos_total = expenses_mgr.aggregate(
+                        monto_total=Coalesce(
+                            Sum('monto'),
+                            Value(0),
+                            output_field=DecimalField(max_digits=12, decimal_places=2),
+                        ),
+                        cantidad=Count('id'),
+                    )
+                    gastos_por_categoria_qs = (
+                        expenses_mgr.values('categoria')
+                        .annotate(
+                            monto=Coalesce(
+                                Sum('monto'),
+                                Value(0),
+                                output_field=DecimalField(max_digits=12, decimal_places=2),
+                            )
+                        )
+                        .order_by()
+                    )
                     gastos_por_categoria = [
                         {"categoria": it["categoria"], "monto": float(it["monto"] or 0)} for it in gastos_por_categoria_qs
                     ]
