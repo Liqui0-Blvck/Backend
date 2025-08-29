@@ -35,7 +35,7 @@ class ShiftClosingSerializer(serializers.ModelSerializer):
     """Serializador para el cierre de caja del turno"""
     cerrado_por_nombre = serializers.SerializerMethodField()
     # Aceptar UID del turno en creación/actualización
-    shift = serializers.CharField(write_only=True, required=True)
+    shift = serializers.CharField(write_only=True, required=False)
     # Exponer el UID del turno en respuestas
     shift_uid = serializers.SerializerMethodField(read_only=True)
 
@@ -154,14 +154,17 @@ class ShiftExpenseSerializer(serializers.ModelSerializer):
     """Serializador para los gastos incurridos durante un turno"""
     autorizado_por_nombre = serializers.SerializerMethodField()
     registrado_por_nombre = serializers.SerializerMethodField()
-    categoria_display = serializers.SerializerMethodField()
     metodo_pago_display = serializers.SerializerMethodField()
     comprobante_url = serializers.SerializerMethodField()
+    # Aceptar UID del turno al crear/actualizar
+    shift = serializers.CharField(write_only=True, required=True)
+    # Exponer el UID del turno en respuestas
+    shift_uid = serializers.SerializerMethodField(read_only=True)
     
     class Meta:
         model = ShiftExpense
         fields = [
-            'id', 'shift', 'descripcion', 'monto', 'categoria', 'categoria_display',
+            'id', 'shift', 'shift_uid', 'descripcion', 'monto', 'categoria', 'categoria_display',
             'metodo_pago', 'metodo_pago_display', 'comprobante', 'comprobante_url',
             'numero_comprobante', 'autorizado_por', 'autorizado_por_nombre',
             'registrado_por', 'registrado_por_nombre', 'fecha', 'notas', 'business'
@@ -177,9 +180,6 @@ class ShiftExpenseSerializer(serializers.ModelSerializer):
             return f"{obj.registrado_por.first_name} {obj.registrado_por.last_name}".strip() or obj.registrado_por.username
         return None
     
-    def get_categoria_display(self, obj):
-        return obj.get_categoria_display()
-    
     def get_metodo_pago_display(self, obj):
         return obj.get_metodo_pago_display()
     
@@ -187,6 +187,48 @@ class ShiftExpenseSerializer(serializers.ModelSerializer):
         if obj.comprobante:
             return obj.comprobante.url
         return None
+
+    def get_shift_uid(self, obj):
+        try:
+            return str(obj.shift.uid) if getattr(obj, 'shift', None) else None
+        except Exception:
+            return None
+
+    def _resolve_shift(self, uid):
+        """Resuelve el UID de turno al objeto Shift, validando por business en context si existe."""
+        if not uid:
+            raise serializers.ValidationError({'shift': 'Es obligatorio especificar el turno (UID).'})
+        request = self.context.get('request') if hasattr(self, 'context') else None
+        perfil = getattr(getattr(request, 'user', None), 'perfil', None) if request else None
+        try:
+            if perfil is not None:
+                return Shift.objects.get(uid=uid, business=perfil.business)
+            # Fallback si no hay request en context
+            return Shift.objects.get(uid=uid)
+        except Shift.DoesNotExist:
+            raise serializers.ValidationError({'shift': 'Turno no encontrado.'})
+
+    def create(self, validated_data):
+        shift_uid = validated_data.pop('shift', None)
+        shift_obj = self._resolve_shift(shift_uid)
+        validated_data['shift'] = shift_obj
+        # Auto- completar business/registrado_por si vienen en context
+        request = self.context.get('request') if hasattr(self, 'context') else None
+        if request:
+            user = getattr(request, 'user', None)
+            perfil = getattr(user, 'perfil', None) if user else None
+            if perfil and 'business' not in validated_data:
+                validated_data['business'] = perfil.business
+            if user and 'registrado_por' not in validated_data:
+                validated_data['registrado_por'] = user
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        # Permitir actualizar el turno por UID opcionalmente
+        shift_uid = validated_data.pop('shift', None)
+        if shift_uid is not None:
+            validated_data['shift'] = self._resolve_shift(shift_uid)
+        return super().update(instance, validated_data)
 
 
 class ShiftEstadoSerializer(serializers.Serializer):

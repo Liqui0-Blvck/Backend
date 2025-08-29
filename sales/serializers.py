@@ -546,15 +546,6 @@ class SaleSerializer(serializers.ModelSerializer):
         sale.save()
         return sale
 
-
-class SaleListSerializer(SaleSerializer):
-    class Meta(SaleSerializer.Meta):
-        fields = (
-            'uid', 'codigo_venta', 'cliente_nombre', 'vendedor_nombre', 'total', 
-            'estado_pago', 'estado_display', 'created_at'
-        )
-
-
 class SaleSerializer(serializers.ModelSerializer):
     vendedor_nombre = serializers.SerializerMethodField()
     cliente_nombre = serializers.SerializerMethodField()
@@ -750,6 +741,7 @@ class SaleListSerializer(serializers.ModelSerializer):
             'estado_pago',
             'estado_pago_display',
             'metodo_pago',
+            'cancelada'
         )
 
     def get_cliente_nombre(self, obj):

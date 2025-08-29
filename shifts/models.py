@@ -65,28 +65,20 @@ class ShiftExpense(BaseModel):
     Modelo para registrar los gastos incurridos durante un turno.
     Permite llevar un control detallado de todos los gastos operativos.
     """
-    CATEGORIA_CHOICES = [
-        ("transporte", "Transporte"),
-        ("insumos", "Insumos"),
-        ("servicios", "Servicios"),
-        ("personal", "Personal"),
-        ("mantenimiento", "Mantenimiento"),
-        ("impuestos", "Impuestos"),
-        ("otros", "Otros"),
-    ]
     
     METODO_PAGO_CHOICES = [
         ("efectivo", "Efectivo"),
         ("transferencia", "Transferencia"),
-        ("tarjeta_debito", "Tarjeta de Débito"),
-        ("tarjeta_credito", "Tarjeta de Crédito"),
+        ("tarjeta", "Tarjeta"),
+        ("cheque", "Cheque"),
+        ("deposito", "Depósito"),
         ("otro", "Otro"),
     ]
     
     shift = models.ForeignKey(Shift, on_delete=models.CASCADE, related_name="expenses")
     descripcion = models.CharField(max_length=255, help_text="Descripción del gasto")
     monto = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(0)], help_text="Monto del gasto")
-    categoria = models.CharField(max_length=20, choices=CATEGORIA_CHOICES, default="otros", help_text="Categoría del gasto")
+    categoria = models.CharField(max_length=20, help_text="Categoría del gasto")
     metodo_pago = models.CharField(max_length=20, choices=METODO_PAGO_CHOICES, default="efectivo", help_text="Método de pago utilizado")
     comprobante = models.FileField(upload_to='comprobantes_gastos/', null=True, blank=True, help_text="Imagen o PDF del comprobante")
     numero_comprobante = models.CharField(max_length=50, blank=True, help_text="Número de factura o boleta")
