@@ -8,7 +8,7 @@ from decimal import Decimal
 class BoxTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = BoxType
-        fields = ('uid', 'nombre', 'descripcion', 'peso_caja', 'capacidad_por_caja', 'business')
+        fields = ('uid', 'nombre', 'descripcion', 'peso_caja', 'capacidad_por_caja', 'cantidad_max_cajas', 'business')
 
 class SupplierSerializer(serializers.ModelSerializer):
     """
@@ -372,13 +372,21 @@ class FruitLotListSerializer(serializers.ModelSerializer):
     costo_total_pallet = serializers.SerializerMethodField()
     proveedor = serializers.CharField(source='proveedor.nombre', read_only=True)
     peso_reservado = serializers.SerializerMethodField()
+    # Peso del BoxType (explícito)
+    box_type_peso_caja = serializers.SerializerMethodField()
+    # Campos informativos (solo lectura)
+    kg_por_caja_estimada = serializers.SerializerMethodField()
+    tara_por_caja_kg = serializers.SerializerMethodField()
+    kg_bruto_por_caja_estimada = serializers.SerializerMethodField()
 
     class Meta:
         model = FruitLot
         fields = (
             'uid', 'producto', 'producto_nombre', 'tipo_producto', 'calibre',
             'peso_bruto', 'peso_neto', 'peso_reservado', 'cajas_disponibles','estado_maduracion', 'estado_lote', 'fecha_ingreso', 
-            'procedencia', 'proveedor', 'costo_inicial', 'en_concesion', 'costo_total_pallet', 'proveedor'
+            'procedencia', 'proveedor', 'costo_inicial', 'en_concesion', 'costo_total_pallet', 'proveedor',
+            # Informativos
+            'kg_por_caja_estimada', 'tara_por_caja_kg', 'kg_bruto_por_caja_estimada', 'box_type_peso_caja',
         )
 
     def _get_active_reservations_sum(self, obj):
@@ -456,6 +464,39 @@ class FruitLotListSerializer(serializers.ModelSerializer):
             pass
         return float(obj.peso_neto or 0)
 
+    # --------- Campos informativos ---------
+    def get_kg_por_caja_estimada(self, obj):
+        try:
+            if obj.cantidad_cajas and obj.cantidad_cajas > 0 and obj.peso_neto:
+                return round(float(obj.peso_neto) / float(obj.cantidad_cajas), 2)
+        except Exception:
+            pass
+        return None
+
+    def get_tara_por_caja_kg(self, obj):
+        try:
+            if obj.box_type and obj.box_type.peso_caja is not None:
+                return float(obj.box_type.peso_caja)
+        except Exception:
+            pass
+        return None
+
+    def get_kg_bruto_por_caja_estimada(self, obj):
+        kg = self.get_kg_por_caja_estimada(obj)
+        tara = self.get_tara_por_caja_kg(obj)
+        if kg is not None and tara is not None:
+            return round(kg + tara, 2)
+        return None
+
+    def get_box_type_peso_caja(self, obj):
+        """Retorna explícitamente el peso de la caja del BoxType asociado."""
+        try:
+            if obj.box_type and obj.box_type.peso_caja is not None:
+                return float(obj.box_type.peso_caja)
+        except Exception:
+            pass
+        return None
+
 class FruitLotSerializer(serializers.ModelSerializer):
     producto_nombre = serializers.SerializerMethodField()
     box_type_nombre = serializers.SerializerMethodField()
@@ -512,6 +553,10 @@ class FruitLotSerializer(serializers.ModelSerializer):
     cajas_disponibles = serializers.SerializerMethodField()
     kg_disponibles = serializers.SerializerMethodField()
     unidades_disponibles = serializers.SerializerMethodField()
+    # Campos informativos (solo lectura)
+    kg_por_caja_estimada = serializers.SerializerMethodField()
+    tara_por_caja_kg = serializers.SerializerMethodField()
+    kg_bruto_por_caja_estimada = serializers.SerializerMethodField()
 
     class Meta:
         model = FruitLot
@@ -524,7 +569,9 @@ class FruitLotSerializer(serializers.ModelSerializer):
             'producto_nombre', 'box_type_nombre', 'pallet_type_nombre', 'costo_actual', 'proveedor_nombre',
             'dias_desde_ingreso', 'dinero_generado', 'porcentaje_vendido', 'propietario_original_nombre',
             'info_producto', 'cajas_disponibles', 'kg_disponibles', 'peso_disponible', 'peso_reservado', 
-            'unidades_disponibles', 'detalles_lote', 'proveedor_uid'
+            'unidades_disponibles', 'detalles_lote', 'proveedor_uid',
+            # Informativos
+            'kg_por_caja_estimada', 'tara_por_caja_kg', 'kg_bruto_por_caja_estimada',
         )
 
     def get_proveedor_nombre(self, obj):
@@ -726,6 +773,30 @@ class FruitLotSerializer(serializers.ModelSerializer):
         perdida = self.get_perdida_estimada(obj)
         peso_real = round(disponible - perdida if disponible > perdida else 0, 2)
         return round(self.get_ganancia_kg(obj) * peso_real, 2)
+
+    # --------- Campos informativos ---------
+    def get_kg_por_caja_estimada(self, obj):
+        try:
+            if obj.cantidad_cajas and obj.cantidad_cajas > 0 and obj.peso_neto:
+                return round(float(obj.peso_neto) / float(obj.cantidad_cajas), 2)
+        except Exception:
+            pass
+        return None
+
+    def get_tara_por_caja_kg(self, obj):
+        try:
+            if obj.box_type and obj.box_type.peso_caja is not None:
+                return float(obj.box_type.peso_caja)
+        except Exception:
+            pass
+        return None
+
+    def get_kg_bruto_por_caja_estimada(self, obj):
+        kg = self.get_kg_por_caja_estimada(obj)
+        tara = self.get_tara_por_caja_kg(obj)
+        if kg is not None and tara is not None:
+            return round(kg + tara, 2)
+        return None
 
     def get_resumen_producto(self, obj):
         tipo = self.get_tipo_producto(obj)

@@ -2,9 +2,9 @@ from rest_framework import serializers
 from django.db.models import Sum, Count, Avg, Q, F, ExpressionWrapper, DecimalField, FloatField
 from django.utils import timezone
 
-from .models import Shift, BoxRefill, ShiftExpense
+from .models import Shift, BoxRefill, ShiftExpense, ShiftClosing
 from .serializers import ShiftExpenseSerializer
-from sales.models import Sale, SalePending
+from sales.models import Sale, SalePending, SaleItem
 from inventory.models import FruitLot, GoodsReception, ReceptionDetail
 from accounts.models import CustomUser, Perfil
 from accounts.serializers import CustomUserSerializer
@@ -48,6 +48,7 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
     usuario_abre_nombre = serializers.SerializerMethodField()
     usuario_cierra_nombre = serializers.SerializerMethodField()
     duracion_minutos = serializers.SerializerMethodField()
+    caja_resumen = serializers.SerializerMethodField()
     
     # Resumen de ventas
     ventas_resumen = serializers.SerializerMethodField()
@@ -74,7 +75,7 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
             'uid', 'business', 'usuario_abre', 'usuario_cierra', 
             'usuario_abre_nombre', 'usuario_cierra_nombre',
             'fecha_apertura', 'fecha_cierre', 'estado', 'motivo_diferencia',
-            'duracion_minutos', 'ventas_resumen', 'ventas_detalle', 
+            'duracion_minutos', 'caja_resumen', 'ventas_resumen', 'ventas_detalle', 
             'ventas_pendientes', 'gastos',
             'movimientos_inventario', 'recepciones', 'rellenos_cajas', 
             'transacciones_financieras'
@@ -115,48 +116,62 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
             created_at__gte=fecha_inicio,
             created_at__lte=fecha_fin
         )
-        
-        # Total de ventas
+        # Ítems de ventas dentro del rango
+        items = SaleItem.objects.filter(
+            venta__in=ventas
+        )
+
+        # Totales
         total_ventas = ventas.count()
         monto_total = ventas.aggregate(total=Sum('total'))['total'] or 0
-        total_kg = ventas.aggregate(total_kg=Sum('peso_vendido'))['total_kg'] or 0
-        total_cajas = ventas.aggregate(total_cajas=Sum('cajas_vendidas'))['total_cajas'] or 0
-        
-        # Desglose por método de pago
+        total_kg = items.aggregate(total_kg=Sum('peso_vendido'))['total_kg'] or 0
+        total_unidades = items.aggregate(total_un=Sum('unidades_vendidas'))['total_un'] or 0
+        # Para mantener compatibilidad con nombre previo
+        total_cajas = total_unidades
+
+        # Desglose por método de pago (con totales de montos) y métricas por ítems
         ventas_por_metodo = list(ventas.values('metodo_pago').annotate(
             cantidad=Count('id'),
-            monto=Sum('total'),
-            kg=Sum('peso_vendido'),
-            cajas=Sum('cajas_vendidas')
+            monto=Sum('total')
         ))
-        
-        # Ventas por vendedor
+        # Añadir kg y unidades por método de pago usando items
+        kg_por_metodo = dict(items.values('venta__metodo_pago').annotate(kg=Sum('peso_vendido')).values_list('venta__metodo_pago', 'kg'))
+        un_por_metodo = dict(items.values('venta__metodo_pago').annotate(un=Sum('unidades_vendidas')).values_list('venta__metodo_pago', 'un'))
+        for v in ventas_por_metodo:
+            metodo = v['metodo_pago']
+            v['kg'] = kg_por_metodo.get(metodo, 0) or 0
+            v['cajas'] = un_por_metodo.get(metodo, 0) or 0
+
+        # Ventas por vendedor (sumas a nivel de venta e ítems)
         ventas_por_vendedor = list(ventas.values(
             'vendedor__id',
             'vendedor__first_name',
             'vendedor__last_name'
         ).annotate(
             cantidad=Count('id'),
-            monto=Sum('total'),
-            kg=Sum('peso_vendido'),
-            cajas=Sum('cajas_vendidas')
+            monto=Sum('total')
         ))
+        kg_por_vendedor = dict(items.values('venta__vendedor__id').annotate(kg=Sum('peso_vendido')).values_list('venta__vendedor__id', 'kg'))
+        un_por_vendedor = dict(items.values('venta__vendedor__id').annotate(un=Sum('unidades_vendidas')).values_list('venta__vendedor__id', 'un'))
+        for v in ventas_por_vendedor:
+            vid = v['vendedor__id']
+            v['kg'] = kg_por_vendedor.get(vid, 0) or 0
+            v['cajas'] = un_por_vendedor.get(vid, 0) or 0
         
-        # Productos más vendidos
+        # Productos vendidos (agregar por ítems)
         productos_vendidos = []
-        for venta in ventas:
-            if hasattr(venta, 'lote') and venta.lote and hasattr(venta.lote, 'producto'):
-                producto = venta.lote.producto
-                if producto:
-                    productos_vendidos.append({
-                        'id': producto.id,
-                        'nombre': producto.nombre,
-                        'peso_vendido': venta.peso_vendido,
-                        'cajas_vendidas': venta.cajas_vendidas,
-                        'monto': venta.total,
-                        'fecha_venta': venta.created_at,
-                        'cliente': venta.cliente.nombre if venta.cliente else 'Cliente ocasional'
-                    })
+        for it in items.select_related('lote__producto', 'venta__cliente'):
+            producto = getattr(it.lote, 'producto', None)
+            if producto:
+                productos_vendidos.append({
+                    'id': producto.id,
+                    'nombre': getattr(producto, 'nombre', 'Sin producto'),
+                    'peso_vendido': it.peso_vendido,
+                    'cajas_vendidas': it.unidades_vendidas,
+                    'monto': it.subtotal,
+                    'fecha_venta': it.created_at,
+                    'cliente': it.venta.cliente.nombre if it.venta and it.venta.cliente else 'Cliente ocasional'
+                })
         
         # Agrupar por producto para obtener totales
         productos_agrupados = {}
@@ -210,31 +225,18 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
             created_at__gte=fecha_inicio,
             created_at__lte=fecha_fin
         ).order_by('-created_at')
-        
+
         resultado = []
         for venta in ventas:
-            # Obtener información del lote
-            lote_info = None
-            if hasattr(venta, 'lote') and venta.lote:
-                lote = venta.lote
-                lote_info = {
-                    'id': lote.id,
-                    'uid': getattr(lote, 'uid', None),
-                    'qr_code': getattr(lote, 'qr_code', None),
-                    'producto': getattr(lote.producto, 'nombre', 'Sin producto') if hasattr(lote, 'producto') else 'Sin producto',
-                    'calibre': getattr(lote, 'calibre', None),
-                    'categoria': getattr(lote, 'categoria', None)
-                }
-            
-            # Obtener información del vendedor
+            # Vendedor
             vendedor_info = None
             if venta.vendedor:
                 vendedor_info = {
                     'id': venta.vendedor.id,
                     'nombre': f"{venta.vendedor.first_name} {venta.vendedor.last_name}".strip()
                 }
-            
-            # Obtener información del cliente
+
+            # Cliente
             cliente_info = None
             if venta.cliente:
                 cliente_info = {
@@ -243,24 +245,45 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
                     'rut': getattr(venta.cliente, 'rut', None),
                     'telefono': getattr(venta.cliente, 'telefono', None)
                 }
-            
-            # Construir el detalle de la venta
+
+            # Ítems de la venta
+            items = []
+            for it in venta.items.select_related('lote__producto').all():
+                lote = it.lote
+                lote_info = None
+                if lote:
+                    lote_info = {
+                        'id': lote.id,
+                        'uid': getattr(lote, 'uid', None),
+                        'qr_code': getattr(lote, 'qr_code', None),
+                        'producto': getattr(lote.producto, 'nombre', 'Sin producto') if hasattr(lote, 'producto') else 'Sin producto',
+                        'calibre': getattr(lote, 'calibre', None),
+                        'categoria': getattr(lote, 'categoria', None)
+                    }
+                items.append({
+                    'id': it.id,
+                    'peso_vendido': it.peso_vendido,
+                    'unidades_vendidas': it.unidades_vendidas,
+                    'precio_kg': it.precio_kg,
+                    'precio_unidad': it.precio_unidad,
+                    'subtotal': it.subtotal,
+                    'lote': lote_info
+                })
+
             detalle_venta = {
                 'id': venta.id,
+                'codigo_venta': venta.codigo_venta,
                 'fecha_venta': venta.created_at,
-                'peso_vendido': venta.peso_vendido,
                 'cajas_vendidas': venta.cajas_vendidas,
-                'precio_kg': venta.precio_kg,
                 'total': venta.total,
                 'metodo_pago': venta.metodo_pago,
-                'lote': lote_info,
+                'items': items,
                 'vendedor': vendedor_info,
                 'cliente': cliente_info,
                 'notas': getattr(venta, 'notas', None)
             }
-            
             resultado.append(detalle_venta)
-        
+
         return resultado
         
     def get_ventas_pendientes(self, obj):
@@ -340,31 +363,31 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
         fecha_inicio = obj.fecha_apertura
         fecha_fin = obj.fecha_cierre or timezone.now()
         
-        # Obtener todas las ventas que afectaron el inventario
-        ventas = Sale.objects.filter(
-            business=obj.business,
+        # Obtener ítems de ventas que afectaron el inventario
+        items = SaleItem.objects.filter(
+            venta__business=obj.business,
             created_at__gte=fecha_inicio,
             created_at__lte=fecha_fin
-        )
-        
-        # Calcular movimientos de inventario por ventas
+        ).select_related('venta', 'lote__producto')
+
+        # Calcular movimientos de inventario por ventas (a nivel de ítem)
         movimientos_venta = []
-        for venta in ventas:
-            if hasattr(venta, 'lote') and venta.lote:
+        for it in items:
+            if it.lote:
                 movimientos_venta.append({
                     'tipo': 'venta',
-                    'id_venta': venta.id,
-                    'lote_id': venta.lote.id,
-                    'lote_uid': getattr(venta.lote, 'uid', None),
-                    'lote_qr': getattr(venta.lote, 'qr_code', None),
-                    'producto': venta.lote.producto.nombre if hasattr(venta.lote, 'producto') and venta.lote.producto else 'Sin producto',
-                    'calibre': getattr(venta.lote, 'calibre', None),
-                    'categoria': getattr(venta.lote, 'categoria', None),
-                    'peso_vendido': float(venta.peso_vendido),
-                    'cantidad_cajas': venta.cajas_vendidas,
-                    'fecha': venta.created_at,
-                    'vendedor': f"{venta.vendedor.first_name} {venta.vendedor.last_name}".strip() if venta.vendedor else 'Sin vendedor',
-                    'cliente': venta.cliente.nombre if venta.cliente else 'Cliente ocasional'
+                    'id_venta': it.venta.id if it.venta else None,
+                    'lote_id': it.lote.id,
+                    'lote_uid': getattr(it.lote, 'uid', None),
+                    'lote_qr': getattr(it.lote, 'qr_code', None),
+                    'producto': it.lote.producto.nombre if hasattr(it.lote, 'producto') and it.lote.producto else 'Sin producto',
+                    'calibre': getattr(it.lote, 'calibre', None),
+                    'categoria': getattr(it.lote, 'categoria', None),
+                    'peso_vendido': float(it.peso_vendido),
+                    'cantidad_cajas': it.unidades_vendidas,
+                    'fecha': it.created_at,
+                    'vendedor': f"{it.venta.vendedor.first_name} {it.venta.vendedor.last_name}".strip() if it.venta and it.venta.vendedor else 'Sin vendedor',
+                    'cliente': it.venta.cliente.nombre if it.venta and it.venta.cliente else 'Cliente ocasional'
                 })
         
         # Obtener los rellenos de cajas realizados durante el turno
@@ -652,4 +675,69 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
         #     'usuarios_activos': usuarios_lista,
         #     'total_usuarios_activos': len(usuarios_lista)
         # }
+    
+    def get_caja_resumen(self, obj):
+        """
+        Resumen de caja del turno: ventas y gastos por método, neto, cajas, y comparación con cierre declarado.
+        """
+        fecha_inicio = obj.fecha_apertura
+        fecha_fin = obj.fecha_cierre or timezone.now()
+
+        # Ventas del turno por método
+        ventas_qs = Sale.objects.filter(
+            business=obj.business,
+            created_at__gte=fecha_inicio,
+            created_at__lte=fecha_fin
+        )
+        ventas_montos = ventas_qs.values('metodo_pago').annotate(monto=Sum('total'))
+        ventas_por_metodo = {v['metodo_pago']: float(v['monto'] or 0) for v in ventas_montos}
+        total_ventas = float(ventas_qs.aggregate(total=Sum('total'))['total'] or 0)
+
+        # Cajas vendidas estimadas por items
+        items_qs = SaleItem.objects.filter(venta__in=ventas_qs)
+        cajas_vendidas = int(items_qs.aggregate(total=Sum('unidades_vendidas'))['total'] or 0)
+
+        # Gastos del turno por método
+        gastos_qs = ShiftExpense.objects.filter(shift=obj)
+        gastos_por_metodo_qs = gastos_qs.values('metodo_pago').annotate(monto=Sum('monto'))
+        gastos_por_metodo = {g['metodo_pago']: float(g['monto'] or 0) for g in gastos_por_metodo_qs}
+        total_gastos = float(gastos_qs.aggregate(total=Sum('monto'))['total'] or 0)
+
+        # Neto por método
+        metodos = set(list(ventas_por_metodo.keys()) + list(gastos_por_metodo.keys()))
+        neto_por_metodo = {m: float(ventas_por_metodo.get(m, 0)) - float(gastos_por_metodo.get(m, 0)) for m in metodos}
+
+        # Declarado (solo efectivo) si existe cierre
+        declarado = None
+        diferencias = None
+        diferencia_cajas = None
+        explicacion_diferencias = None
+        closing = getattr(obj, 'closing', None)
+        if closing:
+            declarado = {
+                'efectivo': float(closing.efectivo_declarado),
+                'cajas_contadas': int(closing.cajas_contadas),
+                'fecha_cierre_caja': closing.fecha_cierre_caja,
+                'cerrado_por': closing.cerrado_por.id,
+            }
+            # Diferencia solo para efectivo
+            efectivo_registrado = float(ventas_por_metodo.get('efectivo', 0)) - float(gastos_por_metodo.get('efectivo', 0))
+            diferencias = {
+                'efectivo': declarado['efectivo'] - efectivo_registrado,
+            }
+            diferencia_cajas = declarado['cajas_contadas'] - cajas_vendidas
+            explicacion_diferencias = closing.explicacion_diferencias
+
+        return {
+            'ventas_por_metodo': ventas_por_metodo,
+            'total_ventas': total_ventas,
+            'gastos_por_metodo': gastos_por_metodo,
+            'total_gastos': total_gastos,
+            'neto_por_metodo': neto_por_metodo,
+            'cajas_vendidas': cajas_vendidas,
+            'declarado': declarado,
+            'diferencias': diferencias,
+            'diferencia_cajas': diferencia_cajas,
+            'explicacion_diferencias': explicacion_diferencias,
+        }
      

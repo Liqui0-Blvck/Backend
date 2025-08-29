@@ -133,19 +133,77 @@ class SalePendingItemSerializer(serializers.ModelSerializer):
     producto_nombre = serializers.CharField(source='lote.producto.nombre', read_only=True)
     calibre = serializers.CharField(source='lote.calibre.nombre', read_only=True)
     lote = serializers.CharField(source='lote.uid', read_only=True)
+    # Detalle completo del lote para que el frontend tenga toda la info de origen
+    lote_detalle = serializers.SerializerMethodField(read_only=True)
+    # Cantidades reservadas asociadas a este item pendiente
+    cajas_reservadas = serializers.SerializerMethodField(read_only=True)
+    kg_reservados = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = SalePendingItem
         fields = [
-            'uid', 'lote', 'producto_nombre', 'calibre',
+            'uid', 'lote', 'producto_nombre', 'calibre', 'lote_detalle',
             'cantidad_unidades', 'precio_unidad',
-            'cantidad_kg', 'precio_kg', 'subtotal'
+            'cantidad_kg', 'precio_kg', 'subtotal',
+            'cajas_reservadas', 'kg_reservados'
         ]
 
     def get_vendedor_nombre(self, obj):
         if obj.vendedor:
             return obj.vendedor.username
         return None
+
+    def get_lote_detalle(self, obj):
+        """Devuelve información detallada del lote de origen, similar a FruitLotSaleSerializer."""
+        lote = getattr(obj, 'lote', None)
+        if not lote:
+            return None
+        try:
+            producto = getattr(lote, 'producto', None)
+            return {
+                'uid': getattr(lote, 'uid', None),
+                'producto': {
+                    'uid': getattr(producto, 'uid', None) if producto else None,
+                    'nombre': getattr(producto, 'nombre', None) if producto else None,
+                    'tipo_producto': getattr(producto, 'tipo_producto', None) if producto else None,
+                    'marca': getattr(producto, 'marca', None) if producto else None,
+                } if producto else None,
+                'proveedor_nombre': getattr(getattr(lote, 'proveedor', None), 'name', None),
+                'propietario_original_nombre': getattr(getattr(lote, 'propietario_original', None), 'name', None),
+                'calibre': getattr(lote, 'calibre', None),
+                'fecha_ingreso': getattr(lote, 'fecha_ingreso', None),
+                'en_concesion': getattr(lote, 'en_concesion', None),
+            }
+        except Exception:
+            return None
+
+    def get_cajas_reservadas(self, obj):
+        """Total de cajas reservadas en estado en_proceso para este item pendiente."""
+        try:
+            from inventory.models import StockReservation
+            agg = StockReservation.objects.filter(
+                item_venta_pendiente=obj,
+                estado='en_proceso'
+            ).aggregate(total=models.Sum('cajas_reservadas'))
+            return agg['total'] or 0
+        except Exception:
+            return 0
+
+    def get_kg_reservados(self, obj):
+        """Total de kg reservados en estado en_proceso para este item pendiente."""
+        try:
+            # Si el producto no es palta, no mostramos kilos reservados
+            lote = getattr(obj, 'lote', None)
+            if not lote or not getattr(lote, 'producto', None) or getattr(lote.producto, 'tipo_producto', None) != 'palta':
+                return None
+            from inventory.models import StockReservation
+            agg = StockReservation.objects.filter(
+                item_venta_pendiente=obj,
+                estado='en_proceso'
+            ).aggregate(total=models.Sum('kg_reservados'))
+            return agg['total'] or 0
+        except Exception:
+            return 0
 
 
 class SalePendingSerializer(serializers.ModelSerializer):

@@ -90,7 +90,6 @@ class ShiftExpense(BaseModel):
     metodo_pago = models.CharField(max_length=20, choices=METODO_PAGO_CHOICES, default="efectivo", help_text="Método de pago utilizado")
     comprobante = models.FileField(upload_to='comprobantes_gastos/', null=True, blank=True, help_text="Imagen o PDF del comprobante")
     numero_comprobante = models.CharField(max_length=50, blank=True, help_text="Número de factura o boleta")
-    proveedor = models.CharField(max_length=100, blank=True, help_text="Nombre del proveedor o beneficiario")
     autorizado_por = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE, related_name="gastos_autorizados", help_text="Usuario que autorizó el gasto")
     registrado_por = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE, related_name="gastos_registrados", help_text="Usuario que registró el gasto")
     fecha = models.DateTimeField(default=timezone.now, help_text="Fecha y hora del gasto")
@@ -106,3 +105,38 @@ class ShiftExpense(BaseModel):
         verbose_name = "Gasto de Turno"
         verbose_name_plural = "Gastos de Turno"
         ordering = ["-fecha"]
+
+
+class ShiftClosing(BaseModel):
+    """
+    Cierre de caja por turno: guarda los montos declarados y el conteo de cajas
+    para poder cuadrar con lo registrado en el sistema.
+    """
+    shift = models.OneToOneField(Shift, on_delete=models.CASCADE, related_name="closing")
+    business = models.ForeignKey('business.Business', on_delete=models.CASCADE)
+    fecha_cierre_caja = models.DateTimeField(default=timezone.now)
+    cerrado_por = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE, related_name='shift_closings')
+    # Montos declarados por método de pago
+    efectivo_declarado = models.DecimalField(max_digits=12, decimal_places=2, default=0, validators=[MinValueValidator(0)])
+    # Conteo físico de cajas al cierre
+    cajas_contadas = models.PositiveIntegerField(default=0)
+    # Nuevos campos: control de cajas vacías y bins contados en el cierre
+    # Totales simples
+    cajas_vacias_total = models.PositiveIntegerField(default=0, help_text="Total de cajas vacías contadas en el cierre")
+    bins_total = models.PositiveIntegerField(default=0, help_text="Total de bins contados en el cierre")
+    # Detalle por categorías específicas de cajas vacías
+    cajas_vacias_toros = models.PositiveIntegerField(default=0, help_text="Cantidad de cajas vacías tipo Toro")
+    cajas_vacias_plasticos = models.PositiveIntegerField(default=0, help_text="Cantidad de cajas vacías tipo Plástico")
+
+    notas = models.TextField(blank=True)
+    explicacion_diferencias = models.TextField(blank=True, help_text="Explicación del usuario sobre diferencias detectadas en el cierre")
+
+    history = HistoricalRecords()
+
+    def __str__(self):
+        return f"Cierre de caja turno {self.shift.uid}"
+
+    class Meta:
+        verbose_name = "Cierre de Caja de Turno"
+        verbose_name_plural = "Cierres de Caja de Turno"
+        ordering = ["-fecha_cierre_caja"]

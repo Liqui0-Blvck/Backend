@@ -51,11 +51,21 @@ class PalletType(models.Model):
 
 class BoxType(models.Model):
     uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
-    nombre = models.CharField(max_length=64)
+    BOX_NAME_CHOICES = [
+        ('madera', 'Madera'),
+        ('toro', 'Toro'),
+        ('plastico', 'Plástico'),
+        ('rejilla', 'Rejilla'),
+    ]
+    nombre = models.CharField(max_length=64, choices=BOX_NAME_CHOICES, default='rejilla')
     descripcion = models.TextField(blank=True)
     peso_caja = models.DecimalField(max_digits=6, decimal_places=2)
     capacidad_por_caja = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True)
+    # Máxima cantidad de cajas que se recomienda o permite por pallet para este tipo de caja
+    cantidad_max_cajas = models.PositiveIntegerField(null=True, blank=True, help_text="Límite recomendado de cajas por pallet para este tipo de caja")
     business = models.ForeignKey('business.Business', on_delete=models.CASCADE)
+    # Control de inventario de cajas vacías disponibles en bodega
+    stock_cajas_vacias = models.PositiveIntegerField(default=0, help_text="Cantidad de cajas vacías disponibles en bodega para este tipo de caja")
 
     def __str__(self):
         return self.nombre
@@ -714,6 +724,14 @@ class FruitBin(BaseModel):
     ]
     estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default='DISPONIBLE')
     calidad = models.IntegerField(choices=ReceptionDetail.CALIDAD_CHOICES, default=3)
+    
+    # Ubicación/locación del bin
+    UBICACION_CHOICES = [
+        ('BODEGA', 'En bodega'),
+        ('PACKING', 'Despachado al packing'),
+        ('OTRO', 'Otra locación'),
+    ]
+    ubicacion = models.CharField(max_length=20, choices=UBICACION_CHOICES, default='BODEGA')
     
     # Información de recepción (opcional)
     recepcion = models.ForeignKey(GoodsReception, on_delete=models.SET_NULL, 
