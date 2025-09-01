@@ -155,6 +155,7 @@ class ShiftExpenseSerializer(serializers.ModelSerializer):
     autorizado_por_nombre = serializers.SerializerMethodField()
     registrado_por_nombre = serializers.SerializerMethodField()
     metodo_pago_display = serializers.SerializerMethodField()
+    categoria_display = serializers.SerializerMethodField()
     comprobante_url = serializers.SerializerMethodField()
     # Aceptar UID del turno al crear/actualizar
     shift = serializers.CharField(write_only=True, required=True)
@@ -167,7 +168,7 @@ class ShiftExpenseSerializer(serializers.ModelSerializer):
             'id', 'shift', 'shift_uid', 'descripcion', 'monto', 'categoria', 'categoria_display',
             'metodo_pago', 'metodo_pago_display', 'comprobante', 'comprobante_url',
             'numero_comprobante', 'autorizado_por', 'autorizado_por_nombre',
-            'registrado_por', 'registrado_por_nombre', 'fecha', 'notas', 'business'
+            'registrado_por', 'registrado_por_nombre', 'fecha', 'business'
         ]
     
     def get_autorizado_por_nombre(self, obj):
@@ -182,6 +183,15 @@ class ShiftExpenseSerializer(serializers.ModelSerializer):
     
     def get_metodo_pago_display(self, obj):
         return obj.get_metodo_pago_display()
+    
+    def get_categoria_display(self, obj):
+        """Como 'categoria' no tiene choices en el modelo, devolvemos el valor tal cual.
+        Si en el futuro se agregan choices, se puede cambiar a obj.get_categoria_display().
+        """
+        try:
+            return getattr(obj, 'get_categoria_display')()  # Por si en algún entorno existen choices
+        except Exception:
+            return obj.categoria
     
     def get_comprobante_url(self, obj):
         if obj.comprobante:
@@ -210,6 +220,8 @@ class ShiftExpenseSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         shift_uid = validated_data.pop('shift', None)
+        # Ignorar 'notas' si viene
+        validated_data.pop('notas', None)
         shift_obj = self._resolve_shift(shift_uid)
         validated_data['shift'] = shift_obj
         # Auto- completar business/registrado_por si vienen en context
@@ -228,6 +240,8 @@ class ShiftExpenseSerializer(serializers.ModelSerializer):
         shift_uid = validated_data.pop('shift', None)
         if shift_uid is not None:
             validated_data['shift'] = self._resolve_shift(shift_uid)
+        # Ignorar 'notas' si viene
+        validated_data.pop('notas', None)
         return super().update(instance, validated_data)
 
 
@@ -339,3 +353,227 @@ class ShiftEstadoSerializer(serializers.Serializer):
     def get_turno_uid(self, obj):
         turno = self._get_turno_activo()
         return str(turno.uid) if turno and getattr(turno, 'uid', None) else None
+
+
+class ShiftDetailSerializer(serializers.Serializer):
+    """Detalles financieros e inventario del turno para el frontend."""
+    # Identificación y rango
+    shift_uid = serializers.SerializerMethodField()
+    fecha_apertura = serializers.SerializerMethodField()
+    fecha_cierre = serializers.SerializerMethodField()
+    usuario_abre_nombre = serializers.SerializerMethodField()
+    usuario_cierra_nombre = serializers.SerializerMethodField()
+
+    # Ventas
+    ventas_total = serializers.SerializerMethodField()
+    ventas_por_metodo = serializers.SerializerMethodField()
+    ventas_count = serializers.SerializerMethodField()
+    ticket_promedio = serializers.SerializerMethodField()
+
+    # Gastos
+    gastos_total = serializers.SerializerMethodField()
+    gastos_por_metodo = serializers.SerializerMethodField()
+    gastos_por_categoria = serializers.SerializerMethodField()
+
+    # Efectivo
+    efectivo_esperado = serializers.SerializerMethodField()
+    efectivo_declarado = serializers.SerializerMethodField()
+    diferencia_efectivo = serializers.SerializerMethodField()
+
+    # Inventario cajas/bins
+    cajas_vendidas = serializers.SerializerMethodField()
+    cajas_inventario_actual = serializers.SerializerMethodField()
+    cajas_vacias_total = serializers.SerializerMethodField()
+    cajas_vacias_toros = serializers.SerializerMethodField()
+    cajas_vacias_plasticos = serializers.SerializerMethodField()
+    bins_total = serializers.SerializerMethodField()
+    # Bins recepcionados desde proveedor durante el turno
+    bins_recepcionados = serializers.SerializerMethodField()
+    bins_recepcionados_count = serializers.SerializerMethodField()
+
+    # Helpers comunes
+    def _range(self, shift: Shift):
+        inicio = shift.fecha_apertura
+        fin = shift.fecha_cierre or timezone.now()
+        return inicio, fin
+
+    def _ventas_qs(self, shift: Shift):
+        inicio, fin = self._range(shift)
+        return Sale.objects.filter(
+            business=shift.business,
+            cancelada=False,
+            created_at__gte=inicio,
+            created_at__lte=fin,
+        )
+
+    def _gastos_qs(self, shift: Shift):
+        inicio, fin = self._range(shift)
+        return ShiftExpense.objects.filter(
+            shift=shift,
+            fecha__gte=inicio,
+            fecha__lte=fin,
+        )
+
+    # Identificación
+    def get_shift_uid(self, shift: Shift):
+        return str(shift.uid)
+
+    def get_fecha_apertura(self, shift: Shift):
+        return shift.fecha_apertura
+
+    def get_fecha_cierre(self, shift: Shift):
+        return shift.fecha_cierre
+
+    def get_usuario_abre_nombre(self, shift: Shift):
+        u = shift.usuario_abre
+        return (f"{u.first_name} {u.last_name}".strip() or u.username) if u else None
+
+    def get_usuario_cierra_nombre(self, shift: Shift):
+        u = shift.usuario_cierra
+        return (f"{u.first_name} {u.last_name}".strip() or u.username) if u else None
+
+    # Ventas
+    def get_ventas_total(self, shift: Shift):
+        total = self._ventas_qs(shift).aggregate(total=Sum('total'))['total'] or 0
+        try:
+            return float(total)
+        except Exception:
+            return 0.0
+
+    def get_ventas_por_metodo(self, shift: Shift):
+        qs = self._ventas_qs(shift)
+        metodos = ['efectivo', 'transferencia', 'debito', 'credito']
+        data = {}
+        for m in metodos:
+            data[m] = float(qs.filter(metodo_pago=m).aggregate(total=Sum('total'))['total'] or 0)
+        data['otros'] = float(qs.exclude(metodo_pago__in=metodos).aggregate(total=Sum('total'))['total'] or 0)
+        return data
+
+    def get_ventas_count(self, shift: Shift):
+        return int(self._ventas_qs(shift).count())
+
+    def get_ticket_promedio(self, shift: Shift):
+        count = self.get_ventas_count(shift)
+        if count == 0:
+            return 0.0
+        return round(self.get_ventas_total(shift) / count, 2)
+
+    # Gastos
+    def get_gastos_total(self, shift: Shift):
+        total = self._gastos_qs(shift).aggregate(total=Sum('monto'))['total'] or 0
+        try:
+            return float(total)
+        except Exception:
+            return 0.0
+
+    def get_gastos_por_metodo(self, shift: Shift):
+        qs = self._gastos_qs(shift)
+        metodos = ['efectivo', 'transferencia', 'debito', 'credito']
+        data = {}
+        for m in metodos:
+            data[m] = float(qs.filter(metodo_pago=m).aggregate(total=Sum('monto'))['total'] or 0)
+        data['otros'] = float(qs.exclude(metodo_pago__in=metodos).aggregate(total=Sum('monto'))['total'] or 0)
+        return data
+
+    def get_gastos_por_categoria(self, shift: Shift):
+        qs = self._gastos_qs(shift)
+        # Agrupación simple en Python para no depender de choices
+        totales = {}
+        for e in qs.values('categoria').annotate(total=Sum('monto')):
+            cat = e.get('categoria') or 'sin_categoria'
+            totales[cat] = float(e.get('total') or 0)
+        return totales
+
+    # Efectivo (ventas efectivo - gastos efectivo)
+    def get_efectivo_esperado(self, shift: Shift):
+        ventas_efectivo = float(self._ventas_qs(shift).filter(metodo_pago='efectivo').aggregate(total=Sum('total'))['total'] or 0)
+        gastos_efectivo = float(self._gastos_qs(shift).filter(metodo_pago='efectivo').aggregate(total=Sum('monto'))['total'] or 0)
+        return round(ventas_efectivo - gastos_efectivo, 2)
+
+    def get_efectivo_declarado(self, shift: Shift):
+        cierre = ShiftClosing.objects.filter(shift=shift).order_by('-fecha_cierre_caja').first()
+        return float(getattr(cierre, 'efectivo_declarado', 0) or 0)
+
+    def get_diferencia_efectivo(self, shift: Shift):
+        return round(self.get_efectivo_declarado(shift) - self.get_efectivo_esperado(shift), 2)
+
+    # Inventario
+    def get_cajas_vendidas(self, shift: Shift):
+        # Usar cajas_vendidas de Sale si existe; fallback a suma de unidades de items
+        qs = self._ventas_qs(shift)
+        cajas = qs.aggregate(total=Sum('cajas_vendidas'))['total']
+        if cajas is not None:
+            return int(cajas)
+        # Fallback (más costoso): sumar unidades de items del rango
+        items = SaleItem.objects.filter(
+            venta__in=qs,
+        ).aggregate(total=Sum('unidades_vendidas'))['total'] or 0
+        return int(items)
+
+    def get_cajas_inventario_actual(self, shift: Shift):
+        from inventory.models import FruitLot
+        total = FruitLot.objects.filter(business=shift.business, cantidad_cajas__gt=0).aggregate(total=Sum('cantidad_cajas'))['total'] or 0
+        return int(total)
+
+    def get_cajas_vacias_total(self, shift: Shift):
+        from inventory.models import BoxType
+        total = BoxType.objects.filter(business=shift.business).aggregate(total=Sum('stock_cajas_vacias'))['total'] or 0
+        return int(total)
+
+    def get_cajas_vacias_toros(self, shift: Shift):
+        from inventory.models import BoxType
+        total = BoxType.objects.filter(business=shift.business, nombre='toro').aggregate(total=Sum('stock_cajas_vacias'))['total'] or 0
+        return int(total)
+
+    def get_cajas_vacias_plasticos(self, shift: Shift):
+        from inventory.models import BoxType
+        total = BoxType.objects.filter(business=shift.business, nombre='plastico').aggregate(total=Sum('stock_cajas_vacias'))['total'] or 0
+        return int(total)
+
+    def get_bins_total(self, shift: Shift):
+        from inventory.models import FruitBin
+        return int(FruitBin.objects.filter(business=shift.business).count())
+
+    # Bins recepcionados desde proveedor durante el turno
+    def get_bins_recepcionados(self, shift: Shift):
+        from inventory.models import FruitBin
+        inicio, fin = self._range(shift)
+        qs = (
+            FruitBin.objects.filter(
+                business=shift.business,
+                proveedor__isnull=False,
+                fecha_recepcion__gte=inicio,
+                fecha_recepcion__lte=fin,
+            )
+            .order_by('fecha_recepcion')
+        )
+        data = []
+        for b in qs:
+            try:
+                data.append({
+                    'uid': str(getattr(b, 'uid', '')),
+                    'codigo': getattr(b, 'codigo', None),
+                    'producto': getattr(getattr(b, 'producto', None), 'nombre', None),
+                    'proveedor': getattr(getattr(b, 'proveedor', None), 'nombre', None),
+                    'peso_neto': float(getattr(b, 'peso_neto', 0) or 0),
+                    'fecha_recepcion': getattr(b, 'fecha_recepcion', None),
+                })
+            except Exception:
+                # Si algún bin tiene datos incompletos, no romper el serializer
+                data.append({
+                    'uid': str(getattr(b, 'uid', '')),
+                    'codigo': getattr(b, 'codigo', None),
+                })
+        return data
+
+    def get_bins_recepcionados_count(self, shift: Shift):
+        from inventory.models import FruitBin
+        inicio, fin = self._range(shift)
+        return int(
+            FruitBin.objects.filter(
+                business=shift.business,
+                proveedor__isnull=False,
+                fecha_recepcion__gte=inicio,
+                fecha_recepcion__lte=fin,
+            ).count()
+        )

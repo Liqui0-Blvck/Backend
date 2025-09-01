@@ -74,6 +74,7 @@ class FruitLot(BaseModel):
     uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
     producto = models.ForeignKey('Product', on_delete=models.CASCADE, null=True, blank=True)
     marca = models.CharField(max_length=50, blank=True)
+    variedad = models.CharField(max_length=50, blank=True, null=True)
     proveedor = models.ForeignKey('Supplier', on_delete=models.CASCADE, null=True, blank=True)
     procedencia = models.CharField(max_length=64)
     pais = models.CharField(max_length=32)
@@ -439,10 +440,6 @@ class ReceptionDetail(BaseModel):
     
     history = HistoricalRecords()
     
-    @property
-    def peso_neto(self):
-        """Calcula el peso neto restando la tara del peso bruto"""
-        return self.peso_bruto - self.peso_tara
     
     def __str__(self):
         return f"Pallet {self.numero_pallet} - {self.producto.nombre} ({self.cantidad_cajas} cajas, {self.peso_bruto}kg)"
@@ -510,7 +507,8 @@ def crear_lotes_al_aprobar_recepcion(sender, instance, created, **kwargs):
                         lote = FruitLot(
                             producto=detalle.producto,
                             # El tipo_producto es un atributo del producto, no del lote
-                            marca=detalle.variedad or "",  # Usar variedad como marca si está disponible
+                            marca=(detalle.producto.marca if getattr(detalle, 'producto', None) and getattr(detalle.producto, 'marca', None) else ""),
+                            variedad=detalle.variedad or "",
                             proveedor=instance.proveedor if instance.proveedor else None,
                             procedencia=instance.proveedor.direccion if instance.proveedor and instance.proveedor.direccion else "No especificada",
                             pais="Chile",  # Valor por defecto, podría ser un campo en Proveedor
@@ -564,17 +562,20 @@ def actualizar_lote_desde_detalle(sender, instance, created, **kwargs):
     # Evitar actualizaciones recursivas o innecesarias
     if hasattr(instance, '_actualizando_lote') and instance._actualizando_lote:
         return
-    
+
     # Solo actualizar si hay un lote asociado y la recepción está aprobada
     # Y NO estamos en el proceso de crear lotes desde la recepción
     if instance.lote_creado and instance.recepcion.estado == "aprobado" and not hasattr(instance.recepcion, '_lotes_creados'):
         instance._actualizando_lote = True
         lote = instance.lote_creado
-        
+
         # Actualizar campos relevantes
         lote.cantidad_cajas = instance.cantidad_cajas
         lote.peso_bruto = instance.peso_bruto
         lote.peso_neto = instance.peso_neto
+        # Sincronizar variedad desde el detalle si existe
+        if getattr(instance, 'variedad', None) is not None:
+            lote.variedad = instance.variedad
         
         # Actualizar campos de precios sugeridos
         if instance.precio_sugerido_min is not None:
@@ -714,12 +715,55 @@ class FruitBin(BaseModel):
     # Información de peso
     peso_bruto = models.DecimalField(max_digits=10, decimal_places=2)
     peso_tara = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    # Persistimos peso_neto para evitar confusiones y facilitar reportes
+    peso_neto = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True,
+                                    help_text="Peso neto en kg (peso_bruto - peso_tara)")
+    
+    # Información de costos
+    costo_por_kilo = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True,
+                                         help_text="Costo por kg del bin")
+    costo_total = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True,
+                                      help_text="Costo total del bin (opcional; si no se define se calcula)")
+    
+    def save(self, *args, **kwargs):
+        """Mantiene peso_neto sincronizado con peso_bruto y peso_tara."""
+        try:
+            if self.peso_bruto is not None and self.peso_tara is not None:
+                self.peso_neto = self.peso_bruto - self.peso_tara
+                # Si guardan con update_fields y actualizan bruto/tara, asegurar que peso_neto también se persista
+                update_fields = kwargs.get('update_fields')
+                if update_fields is not None:
+                    try:
+                        # update_fields puede venir como set o lista
+                        uf = set(update_fields)
+                        if 'peso_bruto' in uf or 'peso_tara' in uf:
+                            uf.add('peso_neto')
+                            kwargs['update_fields'] = list(uf)
+                    except Exception:
+                        # Si algo falla, no bloquear el save
+                        pass
+        except Exception:
+            pass
+        super().save(*args, **kwargs)
+    
+    @property
+    def costo_total_calculado(self):
+        """Retorna costo_total si existe; en su defecto calcula costo_por_kilo * peso_neto"""
+        try:
+            if self.costo_total is not None:
+                return self.costo_total
+            if self.costo_por_kilo is not None and self.peso_neto is not None:
+                return self.costo_por_kilo * self.peso_neto
+        except Exception:
+            pass
+        return None
     
     # Estado y calidad
     ESTADO_CHOICES = [
         ('DISPONIBLE', 'Disponible'),
         ('EN_PROCESO', 'En Proceso de Transformación'),
         ('TRANSFORMADO', 'Transformado a Pallets'),
+        ('VENDIDO', 'Vendido'),
         ('DESCARTADO', 'Descartado'),
     ]
     estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default='DISPONIBLE')
@@ -744,11 +788,6 @@ class FruitBin(BaseModel):
     observaciones = models.TextField(blank=True, null=True)
 
     historial = HistoricalRecords()
-    
-    @property
-    def peso_neto(self):
-        """Calcula el peso neto restando la tara del peso bruto"""
-        return self.peso_bruto - self.peso_tara
     
     def __str__(self):
         return f"Bin {self.codigo} - {self.producto.nombre} ({self.peso_bruto}kg)"

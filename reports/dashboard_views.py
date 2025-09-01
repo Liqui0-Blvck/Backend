@@ -1,7 +1,7 @@
 from datetime import datetime, time
 from decimal import Decimal
 
-from django.db.models import Sum, Count, Q, DecimalField, Value, IntegerField, Case, When
+from django.db.models import Sum, Count, Q, DecimalField, Value, IntegerField, Case, When, F, CharField
 from django.db.models.functions import Coalesce, TruncDate, TruncWeek, TruncMonth
 from django.utils import timezone
 from rest_framework.permissions import IsAuthenticated
@@ -547,7 +547,17 @@ class DashboardSummaryView(APIView):
                     venta__created_at__range=(start_dt, end_dt),
                 )
 
-            agg = items_qs.values('lote__producto__nombre').annotate(
+            # Agrupar por nombre de producto correcto: si viene de BIN usar bin__producto__nombre, si no lote__producto__nombre
+            items_qs = items_qs.annotate(
+                producto_nombre=Case(
+                    When(bin__isnull=False, then=F('bin__producto__nombre')),
+                    When(lote__isnull=False, then=F('lote__producto__nombre')),
+                    default=Value(''),
+                    output_field=CharField(max_length=128),
+                )
+            )
+
+            agg = items_qs.values('producto_nombre').annotate(
                 ventas=Count('venta_id', distinct=True),
                 cajas=Coalesce(Sum('unidades_vendidas'), 0),
                 monto=Coalesce(Sum('subtotal'), Value(0), output_field=DecimalField(max_digits=12, decimal_places=2)),
@@ -556,7 +566,7 @@ class DashboardSummaryView(APIView):
             ranking = []
             for row in agg:
                 ranking.append({
-                    "producto": row['lote__producto__nombre'] or '',
+                    "producto": row['producto_nombre'] or '',
                     "ventas": int(row['ventas'] or 0),
                     "cajas": int(row['cajas'] or 0),
                     "monto": None if (not is_admin_like and role != 'Proveedor') else float(row['monto'] or 0),

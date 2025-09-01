@@ -378,11 +378,12 @@ class FruitLotListSerializer(serializers.ModelSerializer):
     kg_por_caja_estimada = serializers.SerializerMethodField()
     tara_por_caja_kg = serializers.SerializerMethodField()
     kg_bruto_por_caja_estimada = serializers.SerializerMethodField()
+    codigo = serializers.CharField(source='qr_code', read_only=True)
 
     class Meta:
         model = FruitLot
         fields = (
-            'uid', 'producto', 'producto_nombre', 'tipo_producto', 'calibre',
+            'uid', 'producto', 'producto_nombre', 'tipo_producto', 'calibre', 'variedad', 'codigo',
             'peso_bruto', 'peso_neto', 'peso_reservado', 'cajas_disponibles','estado_maduracion', 'estado_lote', 'fecha_ingreso', 
             'procedencia', 'proveedor', 'costo_inicial', 'en_concesion', 'costo_total_pallet', 'proveedor',
             # Informativos
@@ -561,7 +562,7 @@ class FruitLotSerializer(serializers.ModelSerializer):
     class Meta:
         model = FruitLot
         fields = (
-            'uid', 'producto', 'marca', 'proveedor', 'procedencia', 'pais', 'calibre', 'box_type', 'pallet_type',
+            'uid', 'producto', 'marca', 'variedad', 'proveedor', 'procedencia', 'pais', 'calibre', 'box_type', 'pallet_type',
             'cantidad_cajas', 'peso_neto', 'cantidad_unidades', 'costo_inicial', 'fecha_ingreso',
             'estado_lote', 'estado_maduracion', 'en_concesion', 'comision_por_kilo', 'fecha_limite_concesion',
             'propietario_original', 

@@ -67,6 +67,10 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
     
     # Transacciones financieras
     transacciones_financieras = serializers.SerializerMethodField()
+
+    # Bins recepcionados desde proveedor durante el turno
+    bins_recepcionados = serializers.SerializerMethodField()
+    bins_recepcionados_count = serializers.SerializerMethodField()
     
     
     class Meta:
@@ -78,7 +82,7 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
             'duracion_minutos', 'caja_resumen', 'ventas_resumen', 'ventas_detalle', 
             'ventas_pendientes', 'gastos',
             'movimientos_inventario', 'recepciones', 'rellenos_cajas', 
-            'transacciones_financieras'
+            'transacciones_financieras', 'bins_recepcionados', 'bins_recepcionados_count'
         ]
     
     def get_usuario_abre_nombre(self, obj):
@@ -124,7 +128,11 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
         # Totales
         total_ventas = ventas.count()
         monto_total = ventas.aggregate(total=Sum('total'))['total'] or 0
-        total_kg = items.aggregate(total_kg=Sum('peso_vendido'))['total_kg'] or 0
+        # Solo contar kilos para productos tipo 'palta'
+        items_palta = items.filter(
+            Q(lote__producto__tipo_producto='palta') | Q(bin__producto__tipo_producto='palta')
+        )
+        total_kg = items_palta.aggregate(total_kg=Sum('peso_vendido'))['total_kg'] or 0
         total_unidades = items.aggregate(total_un=Sum('unidades_vendidas'))['total_un'] or 0
         # Para mantener compatibilidad con nombre previo
         total_cajas = total_unidades
@@ -135,7 +143,8 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
             monto=Sum('total')
         ))
         # Añadir kg y unidades por método de pago usando items
-        kg_por_metodo = dict(items.values('venta__metodo_pago').annotate(kg=Sum('peso_vendido')).values_list('venta__metodo_pago', 'kg'))
+        # Kilos por método: solo palta
+        kg_por_metodo = dict(items_palta.values('venta__metodo_pago').annotate(kg=Sum('peso_vendido')).values_list('venta__metodo_pago', 'kg'))
         un_por_metodo = dict(items.values('venta__metodo_pago').annotate(un=Sum('unidades_vendidas')).values_list('venta__metodo_pago', 'un'))
         for v in ventas_por_metodo:
             metodo = v['metodo_pago']
@@ -151,7 +160,8 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
             cantidad=Count('id'),
             monto=Sum('total')
         ))
-        kg_por_vendedor = dict(items.values('venta__vendedor__id').annotate(kg=Sum('peso_vendido')).values_list('venta__vendedor__id', 'kg'))
+        # Kilos por vendedor: solo palta
+        kg_por_vendedor = dict(items_palta.values('venta__vendedor__id').annotate(kg=Sum('peso_vendido')).values_list('venta__vendedor__id', 'kg'))
         un_por_vendedor = dict(items.values('venta__vendedor__id').annotate(un=Sum('unidades_vendidas')).values_list('venta__vendedor__id', 'un'))
         for v in ventas_por_vendedor:
             vid = v['vendedor__id']
@@ -166,7 +176,7 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
                 productos_vendidos.append({
                     'id': producto.id,
                     'nombre': getattr(producto, 'nombre', 'Sin producto'),
-                    'peso_vendido': it.peso_vendido,
+                    'peso_vendido': it.peso_vendido if getattr(producto, 'tipo_producto', None) == 'palta' else 0,
                     'cajas_vendidas': it.unidades_vendidas,
                     'monto': it.subtotal,
                     'fecha_venta': it.created_at,
@@ -383,7 +393,7 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
                     'producto': it.lote.producto.nombre if hasattr(it.lote, 'producto') and it.lote.producto else 'Sin producto',
                     'calibre': getattr(it.lote, 'calibre', None),
                     'categoria': getattr(it.lote, 'categoria', None),
-                    'peso_vendido': float(it.peso_vendido),
+                    'peso_vendido': float(it.peso_vendido) if (hasattr(it.lote, 'producto') and it.lote.producto and getattr(it.lote.producto, 'tipo_producto', None) == 'palta') else 0.0,
                     'cantidad_cajas': it.unidades_vendidas,
                     'fecha': it.created_at,
                     'vendedor': f"{it.venta.vendedor.first_name} {it.venta.vendedor.last_name}".strip() if it.venta and it.venta.vendedor else 'Sin vendedor',
@@ -440,11 +450,19 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
         fecha_fin = obj.fecha_cierre or timezone.now()
         
         # Obtener todas las recepciones realizadas durante el turno
-        recepciones = GoodsReception.objects.filter(
+        recepciones_qs = GoodsReception.objects.filter(
             business=obj.business,
             fecha_recepcion__gte=fecha_inicio,
             fecha_recepcion__lte=fecha_fin
-        ).order_by('-fecha_recepcion')
+        )
+        # Excluir si el proveedor se llama igual que el negocio (case-insensitive)
+        try:
+            business_nombre = getattr(obj.business, 'nombre', None)
+            if business_nombre:
+                recepciones_qs = recepciones_qs.exclude(proveedor__nombre__iexact=business_nombre)
+        except Exception:
+            pass
+        recepciones = recepciones_qs.order_by('-fecha_recepcion')
         
         resultado = []
         for recepcion in recepciones:
@@ -452,12 +470,13 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
             detalles = []
             if hasattr(recepcion, 'detalles'):
                 for detalle in recepcion.detalles.all():
+                    es_palta = hasattr(detalle, 'producto') and detalle.producto and getattr(detalle.producto, 'tipo_producto', None) == 'palta'
                     detalles.append({
                         'id': detalle.id,
                         'producto': detalle.producto.nombre if hasattr(detalle, 'producto') and detalle.producto else 'Sin producto',
                         'cantidad_cajas': detalle.cantidad_cajas,
-                        'peso_bruto': float(detalle.peso_bruto),
-                        'peso_neto': float(detalle.peso_neto),
+                        'peso_bruto': float(detalle.peso_bruto) if es_palta else 0.0,
+                        'peso_neto': float(getattr(detalle, 'peso_neto', 0) or 0) if es_palta else 0.0,
                         'costo': float(detalle.costo),
                         'calibre': detalle.calibre or 'N/A',
                         'variedad': detalle.variedad or 'N/A'
@@ -521,7 +540,7 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
         # Calcular totales por categoría
         categorias = {}
         for gasto in gastos:
-            categoria = gasto.get_categoria_display()
+            categoria = getattr(gasto, 'categoria', None)
             if categoria not in categorias:
                 categorias[categoria] = 0
             categorias[categoria] += float(gasto.monto)
@@ -612,7 +631,7 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
         for gasto in gastos:
             detalle_transacciones.append({
                 'tipo': 'gasto',
-                'concepto': f"{gasto.get_categoria_display()}: {gasto.descripcion}",
+                'concepto': f"{getattr(gasto, 'categoria', '')}: {gasto.descripcion}",
                 'monto': -float(gasto.monto)  # Negativo porque es un gasto
             })
         
@@ -675,6 +694,71 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
         #     'usuarios_activos': usuarios_lista,
         #     'total_usuarios_activos': len(usuarios_lista)
         # }
+
+    # --- Bins recepcionados desde proveedor durante el turno ---
+    def get_bins_recepcionados(self, obj):
+        """Lista de bins recepcionados desde proveedor en el rango del turno."""
+        try:
+            from inventory.models import FruitBin
+        except Exception:
+            return []
+
+        inicio = obj.fecha_apertura
+        fin = obj.fecha_cierre or timezone.now()
+
+        qs = FruitBin.objects.filter(
+            business=obj.business,
+            proveedor__isnull=False,
+            fecha_recepcion__gte=inicio,
+            fecha_recepcion__lte=fin,
+        ).select_related('producto', 'proveedor')
+        # Excluir si el proveedor se llama igual que el negocio (case-insensitive)
+        try:
+            business_nombre = getattr(obj.business, 'nombre', None)
+            if business_nombre:
+                qs = qs.exclude(proveedor__nombre__iexact=business_nombre)
+        except Exception:
+            pass
+        qs = qs.order_by('fecha_recepcion')
+
+        data = []
+        for b in qs:
+            try:
+                data.append({
+                    'uid': str(getattr(b, 'uid', '')),
+                    'codigo': getattr(b, 'codigo', None),
+                    'producto': getattr(getattr(b, 'producto', None), 'nombre', None),
+                    'proveedor': getattr(getattr(b, 'proveedor', None), 'nombre', None),
+                    'peso_neto': float(getattr(b, 'peso_neto', 0) or 0) if (hasattr(b, 'producto') and getattr(b, 'producto', None) and getattr(b.producto, 'tipo_producto', None) == 'palta') else 0.0,
+                    'fecha_recepcion': getattr(b, 'fecha_recepcion', None),
+                })
+            except Exception:
+                data.append({
+                    'uid': str(getattr(b, 'uid', '')),
+                    'codigo': getattr(b, 'codigo', None),
+                })
+        return data
+
+    def get_bins_recepcionados_count(self, obj):
+        try:
+            from inventory.models import FruitBin
+        except Exception:
+            return 0
+        inicio = obj.fecha_apertura
+        fin = obj.fecha_cierre or timezone.now()
+        qs = FruitBin.objects.filter(
+            business=obj.business,
+            proveedor__isnull=False,
+            fecha_recepcion__gte=inicio,
+            fecha_recepcion__lte=fin,
+        )
+        try:
+            business_nombre = getattr(obj.business, 'nombre', None)
+            if business_nombre:
+                qs = qs.exclude(proveedor__nombre__iexact=business_nombre)
+        except Exception:
+            pass
+        return int(qs.count())
     
     def get_caja_resumen(self, obj):
         """

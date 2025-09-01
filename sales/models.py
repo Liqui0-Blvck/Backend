@@ -278,7 +278,8 @@ class SaleItem(BaseModel):
     """Modelo para representar los ítems individuales de una venta"""
     uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
     venta = models.ForeignKey('Sale', on_delete=models.CASCADE, related_name='items')
-    lote = models.ForeignKey('inventory.FruitLot', on_delete=models.PROTECT)
+    lote = models.ForeignKey('inventory.FruitLot', on_delete=models.PROTECT, null=True, blank=True)
+    bin = models.ForeignKey('inventory.FruitBin', on_delete=models.PROTECT, null=True, blank=True)
     
     # Campos para productos tipo palta (por peso)
     peso_vendido = models.DecimalField(max_digits=7, decimal_places=2, default=0, 
@@ -309,10 +310,36 @@ class SaleItem(BaseModel):
     def save(self, *args, **kwargs):
         # Verificar si es un objeto nuevo (sin ID aún)
         is_new = self.pk is None
+        # Capturar valores previos para calcular deltas en updates
+        prev_peso_vendido = None
+        prev_unidades_vendidas = None
+        prev_lote_id = None
+        prev_bin_id = None
+        if not is_new:
+            try:
+                prev = self.__class__.objects.get(pk=self.pk)
+                prev_peso_vendido = prev.peso_vendido
+                prev_unidades_vendidas = prev.unidades_vendidas
+                prev_lote_id = prev.lote_id
+                prev_bin_id = prev.bin_id
+            except Exception:
+                prev_peso_vendido = None
+                prev_unidades_vendidas = None
         
         # Importar logging
         import logging
         logger = logging.getLogger(__name__)
+        
+        # Validaciones de exclusividad y disponibilidad
+        if is_new and not self.venta.cancelada:
+            # Exigir que al menos uno esté presente
+            if not self.lote and not self.bin:
+                from django.core.exceptions import ValidationError
+                raise ValidationError("Cada ítem debe tener 'lote' o 'bin'.")
+            # No permitir ambos a la vez
+            if self.lote and self.bin:
+                from django.core.exceptions import ValidationError
+                raise ValidationError("No se puede asociar simultáneamente un 'lote' y un 'bin' al mismo ítem.")
         
         # Validar que no se vendan más cajas de las disponibles
         if is_new and not self.venta.cancelada and self.lote:
@@ -320,14 +347,20 @@ class SaleItem(BaseModel):
                 logger.error(f"SaleItem.save: Error - Intentando vender {self.unidades_vendidas} cajas cuando solo hay {self.lote.cantidad_cajas} disponibles")
                 from django.core.exceptions import ValidationError
                 raise ValidationError(f"No hay suficiente stock. Intentando vender {self.unidades_vendidas} cajas cuando solo hay {self.lote.cantidad_cajas} disponibles.")
+        # Validar disponibilidad de bin
+        if is_new and not self.venta.cancelada and self.bin:
+            # Permitir EN_PROCESO para confirmar ventas provenientes de pre-venta
+            if getattr(self.bin, 'estado', None) not in ('DISPONIBLE', 'EN_PROCESO'):
+                from django.core.exceptions import ValidationError
+                raise ValidationError("El bin no está disponible para la venta.")
         
         # Guardar el objeto
         super().save(*args, **kwargs)
         
-        # Si es un objeto nuevo, actualizar el inventario
-        if is_new and not self.venta.cancelada:
+        # Actualizar inventario y estado (en creación y también en updates con deltas)
+        if not self.venta.cancelada:
             # Actualizar el inventario del lote
-            if self.lote:
+            if self.lote and (is_new or self.lote_id == prev_lote_id):
                 # Log para depuración
                 logger.info(f"SaleItem.save: Actualizando inventario para lote {self.lote.uid}")
                 logger.info(f"SaleItem.save: Cantidad de cajas antes: {self.lote.cantidad_cajas}")
@@ -336,9 +369,23 @@ class SaleItem(BaseModel):
                 # Para productos tipo palta, actualizar por peso
                 if self.lote.producto and self.lote.producto.tipo_producto == 'palta':
                     # Actualizar peso neto
-                    if self.peso_vendido > 0:
+                    # Calcular delta de kg vendidos (solo afectar diferencia en updates)
+                    if is_new:
+                        delta_kg = self.peso_vendido
+                    else:
+                        try:
+                            from decimal import Decimal as D
+                        except Exception:
+                            from decimal import Decimal as D
+                        try:
+                            prev_val = prev_peso_vendido if prev_peso_vendido is not None else D('0')
+                            curr_val = self.peso_vendido if self.peso_vendido is not None else D('0')
+                            delta_kg = curr_val - prev_val
+                        except Exception:
+                            delta_kg = self.peso_vendido
+                    if delta_kg and delta_kg > 0:
                         logger.info(f"SaleItem.save: Peso neto antes: {self.lote.peso_neto}")
-                        logger.info(f"SaleItem.save: Peso vendido: {self.peso_vendido}")
+                        logger.info(f"SaleItem.save: Delta peso vendido: {delta_kg}")
                         # Asegurar aritmética con Decimal para evitar TypeError con floats
                         try:
                             from decimal import Decimal as D
@@ -347,29 +394,116 @@ class SaleItem(BaseModel):
                             from decimal import Decimal as D
                         peso_actual = self.lote.peso_neto if self.lote.peso_neto is not None else D('0')
                         # Convertir peso_vendido de forma segura a Decimal
-                        if isinstance(self.peso_vendido, (float, int)):
-                            peso_vendido_dec = D(str(self.peso_vendido))
+                        if isinstance(delta_kg, (float, int)):
+                            peso_vendido_dec = D(str(delta_kg))
                         else:
                             try:
-                                peso_vendido_dec = D(self.peso_vendido)
+                                peso_vendido_dec = D(delta_kg)
                             except Exception:
-                                peso_vendido_dec = D(str(self.peso_vendido))
+                                peso_vendido_dec = D(str(delta_kg))
                         nuevo_peso = peso_actual - peso_vendido_dec
                         if nuevo_peso < D('0'):
                             nuevo_peso = D('0')
                         self.lote.peso_neto = nuevo_peso
                         logger.info(f"SaleItem.save: Peso neto después: {self.lote.peso_neto}")
-                        
+                
                 # Para todos los productos, actualizar cajas
-                if self.unidades_vendidas > 0:
+                # Calcular delta de unidades (solo descontar diferencia positiva)
+                if is_new:
+                    delta_unidades = self.unidades_vendidas
+                else:
+                    try:
+                        delta_unidades = (self.unidades_vendidas or 0) - (prev_unidades_vendidas or 0)
+                    except Exception:
+                        delta_unidades = self.unidades_vendidas
+                if delta_unidades and delta_unidades > 0:
                     # Asegurarse de que no se vendan más cajas de las disponibles
-                    if self.unidades_vendidas <= self.lote.cantidad_cajas:
-                        self.lote.cantidad_cajas = self.lote.cantidad_cajas - self.unidades_vendidas
+                    if delta_unidades <= self.lote.cantidad_cajas:
+                        self.lote.cantidad_cajas = self.lote.cantidad_cajas - delta_unidades
                         logger.info(f"SaleItem.save: Cantidad de cajas después: {self.lote.cantidad_cajas}")
-                    
+                
                 # Guardar los cambios en el lote
                 self.lote.save(update_fields=['peso_neto', 'cantidad_cajas', 'updated_at'])
                 logger.info(f"SaleItem.save: Cambios guardados en el lote {self.lote.uid}")
+            
+            # Actualizar el estado del bin si aplica
+            if self.bin and (is_new or self.bin_id == prev_bin_id):
+                # Venta de BIN: actualizar siempre a VENDIDO y, si es venta completa (unidades_vendidas>0), dejar peso_bruto = peso_tara
+                logger.info(f"SaleItem.save: Actualizando BIN {self.bin.uid}")
+                update_fields = ['updated_at']
+                try:
+                    from decimal import Decimal as D
+                except Exception:
+                    from decimal import Decimal as D
+                # Descuento de kg si corresponde (venta parcial por kg) usando delta
+                if is_new:
+                    delta_kg_bin = self.peso_vendido
+                else:
+                    try:
+                        prev_val = prev_peso_vendido if prev_peso_vendido is not None else D('0')
+                        curr_val = self.peso_vendido if self.peso_vendido is not None else D('0')
+                        delta_kg_bin = curr_val - prev_val
+                    except Exception:
+                        delta_kg_bin = self.peso_vendido
+                if delta_kg_bin and delta_kg_bin > 0:
+                    peso_bruto_actual = getattr(self.bin, 'peso_bruto', D('0'))
+                    peso_tara = getattr(self.bin, 'peso_tara', D('0'))
+                    if isinstance(delta_kg_bin, (float, int)):
+                        peso_vendido_dec = D(str(delta_kg_bin))
+                    else:
+                        try:
+                            peso_vendido_dec = D(delta_kg_bin)
+                        except Exception:
+                            peso_vendido_dec = D(str(delta_kg_bin))
+                    nuevo_bruto = peso_bruto_actual - peso_vendido_dec
+                    if nuevo_bruto < peso_tara:
+                        nuevo_bruto = peso_tara
+                    if nuevo_bruto != peso_bruto_actual:
+                        logger.info(f"SaleItem.save: BIN peso_bruto {peso_bruto_actual} -> {nuevo_bruto}")
+                        self.bin.peso_bruto = nuevo_bruto
+                        update_fields.append('peso_bruto')
+                        # Asegurar persistencia de peso_neto cuando guardamos con update_fields
+                        if 'peso_neto' not in update_fields:
+                            update_fields.append('peso_neto')
+                # Si se vende como BIN completo (unidades_vendidas>0). Forzar sólo cuando pasa de 0 -> >0
+                activar_venta_completa = False
+                if is_new:
+                    activar_venta_completa = (self.unidades_vendidas and self.unidades_vendidas > 0)
+                else:
+                    try:
+                        activar_venta_completa = ((prev_unidades_vendidas or 0) == 0 and (self.unidades_vendidas or 0) > 0)
+                    except Exception:
+                        activar_venta_completa = (self.unidades_vendidas and self.unidades_vendidas > 0)
+                if activar_venta_completa:
+                    peso_tara = getattr(self.bin, 'peso_tara', D('0'))
+                    if getattr(self.bin, 'peso_bruto', D('0')) != peso_tara:
+                        logger.info(f"SaleItem.save: Forzando BIN {self.bin.uid} peso_bruto -> peso_tara ({peso_tara}) por venta completa")
+                        self.bin.peso_bruto = peso_tara
+                        if 'peso_bruto' not in update_fields:
+                            update_fields.append('peso_bruto')
+                    # Con campo persistente peso_neto, dejar explícitamente en 0
+                    try:
+                        if getattr(self.bin, 'peso_neto', None) is not None:
+                            self.bin.peso_neto = D('0')
+                            if 'peso_neto' not in update_fields:
+                                update_fields.append('peso_neto')
+                    except Exception:
+                        pass
+                # Marcar como vendido siempre que haya unidades o el neto (bruto - tara) sea 0
+                marcar_vendido = False
+                if self.unidades_vendidas and self.unidades_vendidas > 0:
+                    marcar_vendido = True
+                if not marcar_vendido:
+                    try:
+                        marcar_vendido = ((getattr(self.bin, 'peso_bruto', D('0')) - getattr(self.bin, 'peso_tara', D('0'))) <= D('0'))
+                    except Exception:
+                        marcar_vendido = False
+                if marcar_vendido:
+                    logger.info(f"SaleItem.save: Marcando BIN {self.bin.uid} como VENDIDO")
+                    self.bin.estado = 'VENDIDO'
+                    if 'estado' not in update_fields:
+                        update_fields.append('estado')
+                self.bin.save(update_fields=list(set(update_fields)))
     
     def __str__(self):
         if self.lote and self.lote.producto:
@@ -450,7 +584,8 @@ class SalePendingItem(BaseModel):
     """Modelo para representar los ítems individuales de una venta pendiente"""
     uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
     venta_pendiente = models.ForeignKey('SalePending', on_delete=models.CASCADE, related_name='items')
-    lote = models.ForeignKey('inventory.FruitLot', on_delete=models.PROTECT)
+    lote = models.ForeignKey('inventory.FruitLot', on_delete=models.PROTECT, null=True, blank=True)
+    bin = models.ForeignKey('inventory.FruitBin', on_delete=models.PROTECT, null=True, blank=True)
     
     # Campos para productos tipo palta (por peso)
     cantidad_kg = models.DecimalField(max_digits=7, decimal_places=2, default=0, 
@@ -475,12 +610,26 @@ class SalePendingItem(BaseModel):
         import logging
         logger = logging.getLogger(__name__)
         
+        # Exclusividad: debe existir exactamente uno entre lote o bin
+        if is_new:
+            if not self.lote and not self.bin:
+                from django.core.exceptions import ValidationError
+                raise ValidationError("Cada ítem pendiente debe tener 'lote' o 'bin'.")
+            if self.lote and self.bin:
+                from django.core.exceptions import ValidationError
+                raise ValidationError("No se puede asociar simultáneamente un 'lote' y un 'bin' al mismo ítem pendiente.")
+
         # Validar que no se vendan más cajas de las disponibles
         if is_new and self.lote:
             if self.cantidad_unidades > self.lote.cantidad_cajas:
                 logger.error(f"SalePendingItem.save: Error - Intentando reservar {self.cantidad_unidades} cajas cuando solo hay {self.lote.cantidad_cajas} disponibles")
                 from django.core.exceptions import ValidationError
                 raise ValidationError(f"No hay suficiente stock. Intentando reservar {self.cantidad_unidades} cajas cuando solo hay {self.lote.cantidad_cajas} disponibles.")
+        # Validar disponibilidad de bin
+        if is_new and self.bin:
+            if getattr(self.bin, 'estado', None) != 'DISPONIBLE':
+                from django.core.exceptions import ValidationError
+                raise ValidationError("El bin no está disponible para pre-venta.")
         
         super().save(*args, **kwargs)
     
@@ -490,6 +639,8 @@ class SalePendingItem(BaseModel):
                 return f"Ítem pendiente {self.id} - {self.lote.producto.nombre} - {self.cantidad_kg}kg"
             else:
                 return f"Ítem pendiente {self.id} - {self.lote.producto.nombre} - {self.cantidad_unidades}unidades"
+        if self.bin and getattr(self.bin, 'producto', None):
+            return f"Ítem pendiente {self.id} - BIN {getattr(self.bin, 'codigo', '')} - {self.cantidad_kg or self.cantidad_unidades}"
         return f"Ítem pendiente {self.id}"
     
     class Meta:

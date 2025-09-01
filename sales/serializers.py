@@ -5,7 +5,8 @@ from django.db import models, transaction
 from django.db.models import Sum
 from .models import Sale, SalePending, SalePendingItem, Customer, CustomerPayment, SaleItem
 from accounts.serializers import CustomUserSerializer
-from inventory.models import FruitLot, StockReservation, Product
+from inventory.models import FruitLot, StockReservation, Product, FruitBin, BoxType
+from inventory.fruit_bin_serializers import FruitBinDetailSerializer
 from .serializers_billing import BillingInfoNestedSerializer
 
 
@@ -130,11 +131,14 @@ class CustomerPaymentSerializer(serializers.ModelSerializer):
 
 class SalePendingItemSerializer(serializers.ModelSerializer):
     """Serializador para LEER los items de una venta pendiente."""
-    producto_nombre = serializers.CharField(source='lote.producto.nombre', read_only=True)
-    calibre = serializers.CharField(source='lote.calibre.nombre', read_only=True)
+    producto_nombre = serializers.SerializerMethodField(read_only=True)
+    calibre = serializers.SerializerMethodField(read_only=True)
     lote = serializers.CharField(source='lote.uid', read_only=True)
+    bin = serializers.CharField(source='bin.uid', read_only=True)
     # Detalle completo del lote para que el frontend tenga toda la info de origen
     lote_detalle = serializers.SerializerMethodField(read_only=True)
+    # Detalle básico del bin
+    bin_detalle = serializers.SerializerMethodField(read_only=True)
     # Cantidades reservadas asociadas a este item pendiente
     cajas_reservadas = serializers.SerializerMethodField(read_only=True)
     kg_reservados = serializers.SerializerMethodField(read_only=True)
@@ -142,7 +146,7 @@ class SalePendingItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = SalePendingItem
         fields = [
-            'uid', 'lote', 'producto_nombre', 'calibre', 'lote_detalle',
+            'uid', 'lote', 'bin', 'producto_nombre', 'calibre', 'lote_detalle', 'bin_detalle',
             'cantidad_unidades', 'precio_unidad',
             'cantidad_kg', 'precio_kg', 'subtotal',
             'cajas_reservadas', 'kg_reservados'
@@ -177,6 +181,36 @@ class SalePendingItemSerializer(serializers.ModelSerializer):
         except Exception:
             return None
 
+    def get_bin_detalle(self, obj):
+        """Información básica del bin si el item es por bin."""
+        bin_obj = getattr(obj, 'bin', None)
+        if not bin_obj:
+            return None
+        try:
+            # Usar el serializador detallado para exponer más campos del bin
+            return FruitBinDetailSerializer(bin_obj).data
+        except Exception:
+            return None
+
+    def get_producto_nombre(self, obj):
+        try:
+            if getattr(obj, 'lote', None) and getattr(obj.lote, 'producto', None):
+                return obj.lote.producto.nombre
+            if getattr(obj, 'bin', None) and getattr(obj.bin, 'producto', None):
+                return obj.bin.producto.nombre
+        except Exception:
+            pass
+        return None
+
+    def get_calibre(self, obj):
+        try:
+            # Solo aplica a lotes; bins no tienen calibre
+            if getattr(obj, 'lote', None):
+                return getattr(obj.lote, 'calibre', None)
+        except Exception:
+            pass
+        return None
+
     def get_cajas_reservadas(self, obj):
         """Total de cajas reservadas en estado en_proceso para este item pendiente."""
         try:
@@ -192,7 +226,9 @@ class SalePendingItemSerializer(serializers.ModelSerializer):
     def get_kg_reservados(self, obj):
         """Total de kg reservados en estado en_proceso para este item pendiente."""
         try:
-            # Si el producto no es palta, no mostramos kilos reservados
+            # Si el item es por bin o el producto no es palta, no aplica
+            if getattr(obj, 'bin', None):
+                return None
             lote = getattr(obj, 'lote', None)
             if not lote or not getattr(lote, 'producto', None) or getattr(lote.producto, 'tipo_producto', None) != 'palta':
                 return None
@@ -260,7 +296,7 @@ class SalePendingSerializer(serializers.ModelSerializer):
         vendedor = validated_data.get('vendedor')
         business = validated_data.get('business')
 
-        # Crear la instancia de SalePending con todos los datos
+        # Crear la instancia de SalePending con todos los datos (no forzar estado)
         # El **validated_data debe ir al final para que no se sobreescriba
         sale_pending = SalePending.objects.create(**validated_data)
         total_venta = Decimal('0.0')
@@ -268,63 +304,99 @@ class SalePendingSerializer(serializers.ModelSerializer):
 
         for item_data in items_data:
             lote_uid = item_data.get('lote')
-            if not lote_uid:
-                raise serializers.ValidationError("Cada item debe tener un 'lote'.")
-            try:
-                lote_obj = FruitLot.objects.get(uid=lote_uid)
-            except FruitLot.DoesNotExist:
-                raise serializers.ValidationError(f"El lote con uid {lote_uid} no existe.")
+            bin_uid = item_data.get('bin')
+            if not lote_uid and not bin_uid:
+                raise serializers.ValidationError("Cada item debe tener 'lote' o 'bin'.")
+            if lote_uid and bin_uid:
+                raise serializers.ValidationError("No se puede enviar 'lote' y 'bin' en el mismo item.")
 
-            es_palta = lote_obj.producto.tipo_producto == 'palta'
-
-            # --- LECTURA CORRECTA DEL PAYLOAD ---
-            cajas_solicitadas = item_data.get('unidades_vendidas', 0) or 0
-            kg_solicitados = Decimal(item_data.get('peso_vendido', '0') or '0')
-            unidades_solicitadas = cajas_solicitadas if not es_palta else 0
-
-            # --- VALIDACIÓN DE STOCK ---
-            reservas_activas = StockReservation.objects.filter(lote=lote_obj, estado='en_proceso')
-            cajas_ya_reservadas = reservas_activas.aggregate(total=Sum('cajas_reservadas'))['total'] or 0
-            kg_ya_reservados = reservas_activas.aggregate(total=Sum('kg_reservados'))['total'] or Decimal('0.0')
-
-            # Simplificar la validación: solo verificar cajas disponibles para todos los productos
-            stock_cajas_disponible = lote_obj.cantidad_cajas - cajas_ya_reservadas
-            stock_kg_disponible = lote_obj.peso_neto - kg_ya_reservados if lote_obj.peso_neto else Decimal('0.0')
-
-            if stock_cajas_disponible < cajas_solicitadas:
-                raise serializers.ValidationError(f"Stock de cajas insuficiente para {lote_obj.uid}. Disponible: {stock_cajas_disponible}, Solicitado: {cajas_solicitadas}")
-            if es_palta and stock_kg_disponible < kg_solicitados:
-                raise serializers.ValidationError(f"Stock de kg insuficiente para {lote_obj.uid}. Disponible: {stock_kg_disponible}, Solicitado: {kg_solicitados}")
-
-            # --- CÁLCULO Y CREACIÓN ---
             precio_unidad = Decimal(item_data.get('precio_unidad') or '0')
             precio_kg = Decimal(item_data.get('precio_kg') or '0')
-            subtotal = (Decimal(cajas_solicitadas) * precio_unidad) + (kg_solicitados * precio_kg)
 
-            pending_item = SalePendingItem.objects.create(
-                venta_pendiente=sale_pending,
-                lote=lote_obj,
-                cantidad_unidades=cajas_solicitadas,
-                precio_unidad=precio_unidad,
-                cantidad_kg=kg_solicitados,
-                precio_kg=precio_kg,
-                subtotal=subtotal
-            )
+            if lote_uid:
+                try:
+                    lote_obj = FruitLot.objects.get(uid=lote_uid)
+                except FruitLot.DoesNotExist:
+                    raise serializers.ValidationError(f"El lote con uid {lote_uid} no existe.")
 
-            StockReservation.objects.create(
-                lote=lote_obj,
-                item_venta_pendiente=pending_item,
-                usuario=validated_data.get('vendedor'),
-                cajas_reservadas=cajas_solicitadas,
-                kg_reservados=kg_solicitados,
-                cliente=sale_pending.cliente,
-                nombre_cliente=sale_pending.nombre_cliente,
-                rut_cliente=sale_pending.rut_cliente,
-                telefono_cliente=sale_pending.telefono_cliente
-            )
-            
-            total_venta += subtotal
-            total_cajas += cajas_solicitadas
+                es_palta = lote_obj.producto.tipo_producto == 'palta'
+                cajas_solicitadas = item_data.get('unidades_vendidas', 0) or 0
+                kg_solicitados = Decimal(item_data.get('peso_vendido', '0') or '0')
+
+                reservas_activas = StockReservation.objects.filter(lote=lote_obj, estado='en_proceso')
+                cajas_ya_reservadas = reservas_activas.aggregate(total=Sum('cajas_reservadas'))['total'] or 0
+                kg_ya_reservados = reservas_activas.aggregate(total=Sum('kg_reservados'))['total'] or Decimal('0.0')
+
+                stock_cajas_disponible = lote_obj.cantidad_cajas - cajas_ya_reservadas
+                stock_kg_disponible = lote_obj.peso_neto - kg_ya_reservados if lote_obj.peso_neto else Decimal('0.0')
+
+                if stock_cajas_disponible < cajas_solicitadas:
+                    raise serializers.ValidationError(f"Stock de cajas insuficiente para {lote_obj.uid}. Disponible: {stock_cajas_disponible}, Solicitado: {cajas_solicitadas}")
+                if es_palta and stock_kg_disponible < kg_solicitados:
+                    raise serializers.ValidationError(f"Stock de kg insuficiente para {lote_obj.uid}. Disponible: {stock_kg_disponible}, Solicitado: {kg_solicitados}")
+
+                subtotal = (Decimal(cajas_solicitadas) * precio_unidad) + (kg_solicitados * precio_kg)
+
+                pending_item = SalePendingItem.objects.create(
+                    venta_pendiente=sale_pending,
+                    lote=lote_obj,
+                    cantidad_unidades=cajas_solicitadas,
+                    precio_unidad=precio_unidad,
+                    cantidad_kg=kg_solicitados,
+                    precio_kg=precio_kg,
+                    subtotal=subtotal
+                )
+
+                StockReservation.objects.create(
+                    lote=lote_obj,
+                    item_venta_pendiente=pending_item,
+                    usuario=validated_data.get('vendedor'),
+                    cajas_reservadas=cajas_solicitadas,
+                    kg_reservados=kg_solicitados,
+                    cliente=sale_pending.cliente,
+                    nombre_cliente=sale_pending.nombre_cliente,
+                    rut_cliente=sale_pending.rut_cliente,
+                    telefono_cliente=sale_pending.telefono_cliente
+                )
+
+                total_venta += subtotal
+                total_cajas += cajas_solicitadas
+
+            else:
+                # Item por Bin
+                try:
+                    bin_obj = FruitBin.objects.get(uid=bin_uid)
+                except FruitBin.DoesNotExist:
+                    raise serializers.ValidationError(f"El bin con uid {bin_uid} no existe.")
+
+                if getattr(bin_obj, 'estado', None) != 'DISPONIBLE':
+                    raise serializers.ValidationError("El bin no está disponible para pre-venta.")
+
+                cajas_solicitadas = item_data.get('unidades_vendidas', 1) or 1
+                kg_solicitados = Decimal(item_data.get('peso_vendido', '0') or '0')
+
+                subtotal = (Decimal(cajas_solicitadas) * precio_unidad) + (kg_solicitados * precio_kg)
+
+                # 1) Crear el item pendiente con el bin aún en DISPONIBLE (pasa validación del modelo)
+                SalePendingItem.objects.create(
+                    venta_pendiente=sale_pending,
+                    bin=bin_obj,
+                    cantidad_unidades=cajas_solicitadas,
+                    precio_unidad=precio_unidad,
+                    cantidad_kg=kg_solicitados,
+                    precio_kg=precio_kg,
+                    subtotal=subtotal
+                )
+
+                # 2) Inmediatamente marcar el bin como EN_PROCESO para ocultarlo del frontend
+                bin_obj.estado = 'EN_PROCESO'
+                try:
+                    bin_obj.save(update_fields=['estado'])
+                except Exception:
+                    bin_obj.save()
+
+                total_venta += subtotal
+                total_cajas += cajas_solicitadas
 
         sale_pending.total = total_venta
         sale_pending.cantidad_cajas = total_cajas
@@ -357,6 +429,14 @@ class SalePendingSerializer(serializers.ModelSerializer):
                 # Si se proporcionan comentarios (razón de cancelación), actualizarlos
                 if comentarios:
                     instance.comentarios = comentarios
+                # Revertir bins a DISPONIBLE
+                try:
+                    for pending_item in instance.items.all():
+                        if pending_item.bin:
+                            pending_item.bin.estado = 'DISPONIBLE'
+                            pending_item.bin.save(update_fields=['estado'])
+                except Exception:
+                    pass
                 logger.info(f"SalePendingSerializer.update: Estado cambiado a {instance.estado}")
                 instance.save()
                 logger.info(f"SalePendingSerializer.update: Venta guardada, estado final = {instance.estado}")
@@ -367,13 +447,17 @@ class SalePendingSerializer(serializers.ModelSerializer):
                 with transaction.atomic():
                     # Validar stock disponible antes de confirmar la venta
                     for pending_item in instance.items.all():
-                        lote = pending_item.lote
-                        cajas_solicitadas = pending_item.cantidad_unidades
-                        
-                        # Verificar stock disponible (sin contar las reservas que estamos por confirmar)
-                        if lote.cantidad_cajas < cajas_solicitadas:
-                            logger.error(f"Stock insuficiente para confirmar venta. Lote {lote.uid}: disponible={lote.cantidad_cajas}, solicitado={cajas_solicitadas}")
-                            raise serializers.ValidationError(f"Stock insuficiente para confirmar venta. Lote {lote.uid}: disponible={lote.cantidad_cajas}, solicitado={cajas_solicitadas}")
+                        if pending_item.lote:
+                            lote = pending_item.lote
+                            cajas_solicitadas = pending_item.cantidad_unidades
+                            # Verificar stock disponible (sin contar las reservas que estamos por confirmar)
+                            if lote.cantidad_cajas < cajas_solicitadas:
+                                logger.error(f"Stock insuficiente para confirmar venta. Lote {lote.uid}: disponible={lote.cantidad_cajas}, solicitado={cajas_solicitadas}")
+                                raise serializers.ValidationError(f"Stock insuficiente para confirmar venta. Lote {lote.uid}: disponible={lote.cantidad_cajas}, solicitado={cajas_solicitadas}")
+                        elif pending_item.bin:
+                            # Validar disponibilidad de bin (permitir EN_PROCESO por reserva de pendiente)
+                            if getattr(pending_item.bin, 'estado', None) not in ('DISPONIBLE', 'EN_PROCESO'):
+                                raise serializers.ValidationError("El bin ya no está disponible para confirmar la venta.")
                     
                     # Crear la venta
                     sale = Sale.objects.create(
@@ -383,30 +467,41 @@ class SalePendingSerializer(serializers.ModelSerializer):
                         total=instance.total,
                         business=instance.business
                     )
+                    # Crear SaleItems a partir de los items pendientes
+                    for pending_item in instance.items.all():
+                        if pending_item.lote:
+                            SaleItem.objects.create(
+                                venta=sale,
+                                lote=pending_item.lote,
+                                unidades_vendidas=pending_item.cantidad_unidades,
+                                precio_unidad=pending_item.precio_unidad,
+                                peso_vendido=pending_item.cantidad_kg,
+                                precio_kg=pending_item.precio_kg,
+                                subtotal=pending_item.subtotal
+                            )
+                            # Marcar reservas como confirmadas
+                            try:
+                                StockReservation.objects.filter(item_venta_pendiente=pending_item, estado='en_proceso').update(estado='confirmada')
+                            except Exception:
+                                pass
+                        elif pending_item.bin:
+                            SaleItem.objects.create(
+                                venta=sale,
+                                bin=pending_item.bin,
+                                unidades_vendidas=pending_item.cantidad_unidades,
+                                precio_unidad=pending_item.precio_unidad,
+                                peso_vendido=pending_item.cantidad_kg,
+                                precio_kg=pending_item.precio_kg,
+                                subtotal=pending_item.subtotal
+                            )
+                            # Marcar bin como VENDIDO
+                            try:
+                                pending_item.bin.estado = 'VENDIDO'
+                                pending_item.bin.save(update_fields=['estado'])
+                            except Exception:
+                                pass
                     
                     # Si hay motivo de cancelación en los comentarios, guardarlo como motivo_cancelacion
-                    if instance.comentarios:
-                        sale.motivo_cancelacion = instance.comentarios
-                        sale.save(update_fields=['motivo_cancelacion'])
-                    
-                    # Crear los items de venta y actualizar el inventario
-                    for pending_item in instance.items.all():
-                        # Crear el SaleItem con los campos correctos según el modelo
-                        logger.info(f"Creando SaleItem para lote {pending_item.lote.uid}: cajas={pending_item.cantidad_unidades}, stock actual={pending_item.lote.cantidad_cajas}")
-                        SaleItem.objects.create(
-                            venta=sale,
-                            lote=pending_item.lote,
-                            unidades_vendidas=pending_item.cantidad_unidades,
-                            precio_unidad=pending_item.precio_unidad,
-                            peso_vendido=pending_item.cantidad_kg,
-                            precio_kg=pending_item.precio_kg,
-                            subtotal=pending_item.subtotal
-                        )
-                    
-                    # Marcar las reservas como completadas
-                    StockReservation.objects.filter(item_venta_pendiente__venta_pendiente=instance).update(estado='completada')
-                    
-                    # Actualizar el estado de la venta pendiente
                     instance.estado = 'confirmada'
                     instance.save()
                     
@@ -416,6 +511,24 @@ class SalePendingSerializer(serializers.ModelSerializer):
         instance.comentarios = validated_data.get('comentarios', instance.comentarios)
         instance.save()
         return instance
+
+    def get_resumen(self, obj):
+        try:
+            from django.db.models import Sum
+            cajas_por_lote = obj.items.filter(lote__isnull=False).aggregate(total=Sum('unidades_vendidas'))['total'] or 0
+            bins_vendidos = obj.items.filter(bin__isnull=False).count()
+            cajas_vacias = BoxType.objects.filter(business=obj.business).aggregate(total=Sum('stock_cajas_vacias'))['total'] or 0
+            return {
+                'cajas_por_lote': cajas_por_lote,
+                'bins_vendidos': bins_vendidos,
+                'cajas_vacias_en_bodega': cajas_vacias,
+            }
+        except Exception:
+            return {
+                'cajas_por_lote': 0,
+                'bins_vendidos': 0,
+                'cajas_vacias_en_bodega': 0,
+            }
     
     def get_vendedor_nombre(self, obj):
         if obj.vendedor:
@@ -461,6 +574,7 @@ class FruitLotSaleSerializer(serializers.ModelSerializer):
         fields = [
             'uid', 
             'producto',
+            'variedad',
             'proveedor_nombre',
             'propietario_original_nombre',
             'calibre',
@@ -473,6 +587,11 @@ class SaleItemSerializer(serializers.ModelSerializer):
     lote_id = serializers.PrimaryKeyRelatedField(
         queryset=FruitLot.objects.all(), source='lote', write_only=True
     )
+    # Usar detalle de bin para respuestas más informativas
+    bin = FruitBinDetailSerializer(read_only=True)
+    bin_id = serializers.PrimaryKeyRelatedField(
+        queryset=FruitBin.objects.all(), source='bin', write_only=True
+    )
 
     class Meta:
         model = SaleItem
@@ -480,6 +599,8 @@ class SaleItemSerializer(serializers.ModelSerializer):
             'uid',
             'lote',
             'lote_id',
+            'bin',
+            'bin_id',
             'unidades_vendidas',
             'peso_vendido',
             'precio_unidad',
@@ -494,13 +615,14 @@ class SaleSerializer(serializers.ModelSerializer):
     vendedor_nombre = serializers.CharField(source='vendedor.username', read_only=True)
     cliente_nombre = serializers.CharField(source='cliente.nombre', read_only=True)
     estado_display = serializers.CharField(source='get_estado_pago_display', read_only=True)
+    resumen = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Sale
         fields = (
             'uid', 'codigo_venta', 'cliente', 'cliente_nombre', 'vendedor', 'vendedor_nombre', 'metodo_pago',
             'total', 'pagado', 'saldo_pendiente', 'estado_pago', 'estado_display',
-            'fecha_vencimiento', 'created_at', 'items'
+            'fecha_vencimiento', 'created_at', 'items', 'resumen'
         )
         read_only_fields = ('vendedor',)
 
@@ -510,41 +632,122 @@ class SaleSerializer(serializers.ModelSerializer):
         logger = logging.getLogger(__name__)
         
         items_data = validated_data.pop('items')
+        # Aceptar items enviados como string JSON en form-data
+        # Ej: items='[{"bin":"uuid","peso_vendido":459,"precio_kg":1900,"subtotal":872100,"unidades_vendidas":1}]'
+        if isinstance(items_data, str):
+            try:
+                loaded = json.loads(items_data)
+                # Si viene un objeto único, envolverlo en lista
+                if isinstance(loaded, dict):
+                    items_data = [loaded]
+                elif isinstance(loaded, list):
+                    items_data = loaded
+                else:
+                    raise ValueError("El JSON de 'items' debe ser lista u objeto")
+            except Exception as e:
+                logger.error(f"Error parseando 'items' como JSON: {e}")
+                raise serializers.ValidationError("Formato inválido para 'items'. Debe ser una lista JSON o un objeto JSON.")
+        if not isinstance(items_data, list):
+            items_data = list(items_data) if items_data is not None else []
+
+        def D(v):
+            from decimal import Decimal
+            try:
+                return Decimal(str(v or 0))
+            except Exception:
+                return Decimal('0')
+
         perfil = self.context['request'].user.perfil
-        
-        # Validar stock disponible antes de crear la venta
-        for item_data in items_data:
-            lote = item_data['lote']
-            unidades_vendidas = item_data.get('unidades_vendidas', 0)
-            
-            # Verificar que hay suficiente stock
-            if unidades_vendidas > lote.cantidad_cajas:
-                logger.error(f"SaleSerializer.create: Error - Intentando vender {unidades_vendidas} cajas cuando solo hay {lote.cantidad_cajas} disponibles en lote {lote.uid}")
-                raise serializers.ValidationError(f"No hay suficiente stock. Intentando vender {unidades_vendidas} cajas cuando solo hay {lote.cantidad_cajas} disponibles en lote {lote.uid}.")
-        
+
+        # Validaciones mínimas: existencia de lote/bin y stock para lote, disponibilidad para bin
+        for raw in items_data:
+            lote_uid = raw.get('lote') or raw.get('lote_id')
+            bin_uid = raw.get('bin')
+            if not lote_uid and not bin_uid:
+                raise serializers.ValidationError("Cada item debe tener 'lote' o 'bin'.")
+            if lote_uid and bin_uid:
+                raise serializers.ValidationError("No se puede enviar 'lote' y 'bin' en el mismo item.")
+            if lote_uid:
+                try:
+                    lote = FruitLot.objects.get(uid=lote_uid)
+                except FruitLot.DoesNotExist:
+                    raise serializers.ValidationError(f"El lote con uid {lote_uid} no existe.")
+                unidades_vendidas = int(raw.get('unidades_vendidas') or 0)
+                if unidades_vendidas > getattr(lote, 'cantidad_cajas', 0):
+                    raise serializers.ValidationError(
+                        f"No hay suficiente stock. Intentando vender {unidades_vendidas} cajas cuando solo hay {lote.cantidad_cajas} disponibles en lote {lote.uid}."
+                    )
+            else:
+                try:
+                    bin_obj = FruitBin.objects.get(uid=bin_uid)
+                except FruitBin.DoesNotExist:
+                    raise serializers.ValidationError(f"El bin con uid {bin_uid} no existe.")
+                if getattr(bin_obj, 'estado', None) != 'DISPONIBLE':
+                    raise serializers.ValidationError("El bin no está disponible para venta.")
+
         # Crear la venta
         sale = Sale.objects.create(vendedor=self.context['request'].user, business=perfil.business, **validated_data)
-        total_venta = Decimal('0.0')
+        total_venta = D(0)
 
-        # Crear los items de venta
-        for item_data in items_data:
-            logger.info(f"Creando SaleItem para lote {item_data['lote'].uid}: cajas={item_data.get('unidades_vendidas', 0)}, stock actual={item_data['lote'].cantidad_cajas}")
-            # Mapeo explícito para garantizar que los datos del payload se asignan correctamente
-            sale_item = SaleItem.objects.create(
-                sale=sale,
-                lote=item_data['lote'],
-                unidades_vendidas=item_data.get('unidades_vendidas', 0),
-                precio_unidad=item_data.get('precio_unidad', Decimal('0.0')),
-                peso_vendido=item_data.get('peso_vendido', Decimal('0.0')),
-                precio_kg=item_data.get('precio_kg', Decimal('0.0')),
-                es_concesion=item_data.get('es_concesion', False)
-            )
-            total_venta += sale_item.subtotal
+        # Crear los items
+        for raw in items_data:
+            lote_uid = raw.get('lote') or raw.get('lote_id')
+            bin_uid = raw.get('bin')
+            unidades_vendidas = int(raw.get('unidades_vendidas') or (1 if bin_uid else 0))
+            peso_vendido = D(raw.get('peso_vendido'))
+            precio_unidad = D(raw.get('precio_unidad'))
+            precio_kg = D(raw.get('precio_kg'))
+
+            if lote_uid:
+                lote = FruitLot.objects.get(uid=lote_uid)
+                item = SaleItem.objects.create(
+                    venta=sale,
+                    lote=lote,
+                    unidades_vendidas=unidades_vendidas,
+                    precio_unidad=precio_unidad,
+                    peso_vendido=peso_vendido,
+                    precio_kg=precio_kg,
+                    es_concesion=bool(raw.get('es_concesion', False))
+                )
+            else:
+                bin_obj = FruitBin.objects.get(uid=bin_uid)
+                item = SaleItem.objects.create(
+                    venta=sale,
+                    bin=bin_obj,
+                    unidades_vendidas=unidades_vendidas or 1,
+                    precio_unidad=precio_unidad,
+                    peso_vendido=peso_vendido,
+                    precio_kg=precio_kg,
+                    es_concesion=False
+                )
+
+            if not getattr(item, 'subtotal', None) or item.subtotal == 0:
+                item.subtotal = (D(unidades_vendidas) * precio_unidad) + (peso_vendido * precio_kg)
+                item.save(update_fields=['subtotal'])
+            total_venta += item.subtotal
 
         sale.total = total_venta
         sale.saldo_pendiente = total_venta
         sale.save()
         return sale
+
+    def get_resumen(self, obj):
+        try:
+            from django.db.models import Sum
+            cajas_por_lote = obj.items.filter(lote__isnull=False).aggregate(total=Sum('unidades_vendidas'))['total'] or 0
+            bins_vendidos = obj.items.filter(bin__isnull=False).count()
+            cajas_vacias = BoxType.objects.filter(business=obj.business).aggregate(total=Sum('stock_cajas_vacias'))['total'] or 0
+            return {
+                'cajas_por_lote': cajas_por_lote,
+                'bins_vendidos': bins_vendidos,
+                'cajas_vacias_en_bodega': cajas_vacias,
+            }
+        except Exception:
+            return {
+                'cajas_por_lote': 0,
+                'bins_vendidos': 0,
+                'cajas_vacias_en_bodega': 0,
+            }
 
 class SaleSerializer(serializers.ModelSerializer):
     vendedor_nombre = serializers.SerializerMethodField()
@@ -559,6 +762,8 @@ class SaleSerializer(serializers.ModelSerializer):
     proveedor_original_nombre = serializers.SerializerMethodField()
     # Nuevo campo para items de venta
     items = SaleItemSerializer(many=True, required=False)
+    # Resumen de la venta
+    resumen = serializers.SerializerMethodField(read_only=True)
 
     # Configurar campos para aceptar UUIDs
     cliente = serializers.SlugRelatedField(queryset=Customer.objects.all(), slug_field='uid', required=False, allow_null=True)
@@ -569,7 +774,7 @@ class SaleSerializer(serializers.ModelSerializer):
             'uid', 'codigo_venta', 'cliente', 'vendedor', 'cajas_vendidas', 'total',
             'metodo_pago', 'comprobante', 'business', 'pagado', 'fecha_vencimiento',
             'saldo_pendiente', 'estado_pago', 'estado_pago_display', 'pagos_asociados',
-            'vendedor_nombre', 'cliente_nombre', 'items',
+            'vendedor_nombre', 'cliente_nombre', 'items', 'resumen',
             # Campos de cancelación
             'cancelada', 'fecha_cancelacion', 'motivo_cancelacion', 'cancelada_por', 'autorizada_por',
             'cancelada_por_nombre', 'autorizada_por_nombre', 'estado_display',
@@ -645,18 +850,52 @@ class SaleSerializer(serializers.ModelSerializer):
             return obj.proveedor_original.nombre
         return None
 
+    def get_resumen(self, obj):
+        try:
+            cajas_por_lote = obj.items.filter(lote__isnull=False).aggregate(total=Sum('unidades_vendidas'))['total'] or 0
+            bins_vendidos = obj.items.filter(bin__isnull=False).count()
+            cajas_vacias = BoxType.objects.filter(business=obj.business).aggregate(total=Sum('stock_cajas_vacias'))['total'] or 0
+            return {
+                'cajas_por_lote': cajas_por_lote,
+                'bins_vendidos': bins_vendidos,
+                'cajas_vacias_en_bodega': cajas_vacias,
+            }
+        except Exception:
+            return {
+                'cajas_por_lote': 0,
+                'bins_vendidos': 0,
+                'cajas_vacias_en_bodega': 0,
+            }
+
     def create(self, validated_data):
         # El vendedor y el negocio se asignan en la vista (perform_create)
         items_data = self.context['request'].data.get('items', '[]')
         if isinstance(items_data, str):
             items_data = json.loads(items_data)
 
-        # Calcular el total de la venta sumando los subtotales de cada item
-        total = sum(Decimal(item.get('subtotal') or 0) for item in items_data)
+        # Calcular el total de la venta sumando los subtotales de cada item (bin o lote)
+        def D(v):
+            try:
+                return Decimal(str(v or 0))
+            except Exception:
+                return Decimal('0')
+        total = Decimal('0')
+        for item in items_data:
+            # Si no viene subtotal, calcularlo
+            if item.get('subtotal') is None:
+                unidades = int(item.get('unidades_vendidas') or (1 if item.get('bin') else 0))
+                subtotal_calc = D(unidades) * D(item.get('precio_unidad')) + D(item.get('peso_vendido')) * D(item.get('precio_kg'))
+                item['subtotal'] = str(subtotal_calc)
+            total += D(item.get('subtotal'))
         validated_data['total'] = total
 
-        # Calcular el total de cajas vendidas sumando las cajas de cada item
-        cajas_vendidas = sum(int(item.get('unidades_vendidas') or 0) for item in items_data)
+        # Calcular el total de cajas vendidas sumando las cajas de cada item (para bin por defecto 1)
+        cajas_vendidas = 0
+        for item in items_data:
+            if item.get('bin'):
+                cajas_vendidas += int(item.get('unidades_vendidas') or 1)
+            else:
+                cajas_vendidas += int(item.get('unidades_vendidas') or 0)
         validated_data['cajas_vendidas'] = cajas_vendidas
 
         # Crear la venta
@@ -664,20 +903,38 @@ class SaleSerializer(serializers.ModelSerializer):
 
         # Crear los items de la venta
         for item_data in items_data:
-            try:
-                item_payload = {
-                    'lote': FruitLot.objects.get(uid=item_data.get('lote')),
-                    'unidades_vendidas': item_data.get('unidades_vendidas', 0) or 0,
-                    'precio_unidad': item_data.get('precio_unidad', 0) or 0,
-                    'peso_vendido': item_data.get('peso_vendido', 0) or 0,
-                    'precio_kg': item_data.get('precio_kg', 0) or 0,
-                    'subtotal': item_data.get('subtotal', 0) or 0,
-                    'es_concesion': item_data.get('es_concesion', False)
-                }
-                SaleItem.objects.create(venta=venta, **item_payload)
-            except FruitLot.DoesNotExist:
-                # Si un lote no existe, simplemente no se añade ese item
-                pass
+            # Soportar items por lote o por bin
+            if item_data.get('bin'):
+                try:
+                    bin_obj = FruitBin.objects.get(uid=item_data.get('bin'))
+                    SaleItem.objects.create(
+                        venta=venta,
+                        bin=bin_obj,
+                        unidades_vendidas=item_data.get('unidades_vendidas') or 1,
+                        precio_unidad=item_data.get('precio_unidad') or 0,
+                        peso_vendido=item_data.get('peso_vendido') or 0,
+                        precio_kg=item_data.get('precio_kg') or 0,
+                        subtotal=item_data.get('subtotal') or 0,
+                        es_concesion=False
+                    )
+                except FruitBin.DoesNotExist:
+                    # Ignorar items con bin inválido
+                    continue
+            else:
+                try:
+                    item_payload = {
+                        'lote': FruitLot.objects.get(uid=item_data.get('lote')),
+                        'unidades_vendidas': item_data.get('unidades_vendidas', 0) or 0,
+                        'precio_unidad': item_data.get('precio_unidad', 0) or 0,
+                        'peso_vendido': item_data.get('peso_vendido', 0) or 0,
+                        'precio_kg': item_data.get('precio_kg', 0) or 0,
+                        'subtotal': item_data.get('subtotal', 0) or 0,
+                        'es_concesion': item_data.get('es_concesion', False)
+                    }
+                    SaleItem.objects.create(venta=venta, **item_payload)
+                except FruitLot.DoesNotExist:
+                    # Si un lote no existe, simplemente no se añade ese item
+                    continue
         
         return venta
 
@@ -691,29 +948,59 @@ class SaleSerializer(serializers.ModelSerializer):
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         
-        # Recalcular total y cajas
-        total = sum(Decimal(item.get('subtotal') or 0) for item in items_data)
-        cajas_vendidas = sum(int(item.get('unidades_vendidas') or 0) for item in items_data)
+        # Recalcular total y cajas (soportando bin o lote)
+        def D(v):
+            try:
+                return Decimal(str(v or 0))
+            except Exception:
+                return Decimal('0')
+        total = Decimal('0')
+        cajas_vendidas = 0
+        for item in items_data:
+            if item.get('subtotal') is None:
+                unidades = int(item.get('unidades_vendidas') or (1 if item.get('bin') else 0))
+                subtotal_calc = D(unidades) * D(item.get('precio_unidad')) + D(item.get('peso_vendido')) * D(item.get('precio_kg'))
+                item['subtotal'] = str(subtotal_calc)
+            total += D(item.get('subtotal'))
+            if item.get('bin'):
+                cajas_vendidas += int(item.get('unidades_vendidas') or 1)
+            else:
+                cajas_vendidas += int(item.get('unidades_vendidas') or 0)
         instance.total = total
         instance.cajas_vendidas = cajas_vendidas
 
         # Actualizar items
         instance.items.all().delete()
         for item_data in items_data:
-            try:
-                item_payload = {
-                    'lote': FruitLot.objects.get(uid=item_data.get('lote')),
-                    'unidades_vendidas': item_data.get('unidades_vendidas', 0) or 0,
-                    'precio_unidad': item_data.get('precio_unidad', 0) or 0,
-                    'peso_vendido': item_data.get('peso_vendido', 0) or 0,
-                    'precio_kg': item_data.get('precio_kg', 0) or 0,
-                    'subtotal': item_data.get('subtotal', 0) or 0,
-                    'es_concesion': item_data.get('es_concesion', False)
-                }
-                SaleItem.objects.create(venta=instance, **item_payload)
-            except FruitLot.DoesNotExist:
-                # Si un lote no existe, simplemente no se añade ese item
-                pass
+            if item_data.get('bin'):
+                try:
+                    bin_obj = FruitBin.objects.get(uid=item_data.get('bin'))
+                    SaleItem.objects.create(
+                        venta=instance,
+                        bin=bin_obj,
+                        unidades_vendidas=item_data.get('unidades_vendidas') or 1,
+                        precio_unidad=item_data.get('precio_unidad') or 0,
+                        peso_vendido=item_data.get('peso_vendido') or 0,
+                        precio_kg=item_data.get('precio_kg') or 0,
+                        subtotal=item_data.get('subtotal') or 0,
+                        es_concesion=False
+                    )
+                except FruitBin.DoesNotExist:
+                    continue
+            else:
+                try:
+                    item_payload = {
+                        'lote': FruitLot.objects.get(uid=item_data.get('lote')),
+                        'unidades_vendidas': item_data.get('unidades_vendidas', 0) or 0,
+                        'precio_unidad': item_data.get('precio_unidad', 0) or 0,
+                        'peso_vendido': item_data.get('peso_vendido', 0) or 0,
+                        'precio_kg': item_data.get('precio_kg', 0) or 0,
+                        'subtotal': item_data.get('subtotal', 0) or 0,
+                        'es_concesion': item_data.get('es_concesion', False)
+                    }
+                    SaleItem.objects.create(venta=instance, **item_payload)
+                except FruitLot.DoesNotExist:
+                    continue
         
         instance.save()
         return instance

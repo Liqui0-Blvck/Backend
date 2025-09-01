@@ -76,7 +76,7 @@ class ShiftExpense(BaseModel):
     ]
     
     shift = models.ForeignKey(Shift, on_delete=models.CASCADE, related_name="expenses")
-    descripcion = models.CharField(max_length=255, help_text="Descripción del gasto")
+    descripcion = models.CharField(max_length=255, help_text="Descripción del gasto", null=True, blank=True)
     monto = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(0)], help_text="Monto del gasto")
     categoria = models.CharField(max_length=20, help_text="Categoría del gasto")
     metodo_pago = models.CharField(max_length=20, choices=METODO_PAGO_CHOICES, default="efectivo", help_text="Método de pago utilizado")
@@ -85,7 +85,6 @@ class ShiftExpense(BaseModel):
     autorizado_por = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE, related_name="gastos_autorizados", help_text="Usuario que autorizó el gasto")
     registrado_por = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE, related_name="gastos_registrados", help_text="Usuario que registró el gasto")
     fecha = models.DateTimeField(default=timezone.now, help_text="Fecha y hora del gasto")
-    notas = models.TextField(blank=True, help_text="Notas adicionales sobre el gasto")
     business = models.ForeignKey('business.Business', on_delete=models.CASCADE)
     
     history = HistoricalRecords()
