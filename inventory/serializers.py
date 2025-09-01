@@ -1013,30 +1013,46 @@ class GoodsReceptionListSerializer(serializers.ModelSerializer):
 class GoodsReceptionSerializer(serializers.ModelSerializer):
     proveedor = SupplierRelatedField(queryset=Supplier.objects.all())
     detalles = serializers.SerializerMethodField()
-    # detalles_data = ReceptionDetailSerializer(source='detalles', many=True, required=False, write_only=True)
+    detalles_data = ReceptionDetailSerializer(source='detalles', many=True, required=False, write_only=True)
     recibido_por_nombre = serializers.SerializerMethodField()
     revisado_por_nombre = serializers.SerializerMethodField()
     # Información básica del proveedor
     proveedor_info = serializers.SerializerMethodField()
 
     def get_detalles(self, obj):
-        """Retorna una versión simplificada de los detalles de recepción sin duplicados"""
+        """Retorna detalles completos necesarios para editar/actualizar en frontend"""
         detalles = []
-        pallets_procesados = set()  # Conjunto para rastrear pallets ya procesados
-        
-        for detalle in obj.detalles.all():
-            # Verificar si este número de pallet ya fue procesado
-            if detalle.numero_pallet not in pallets_procesados:
-                pallets_procesados.add(detalle.numero_pallet)  # Marcar como procesado
-                
-                detalles.append({
-                    'numero_pallet': detalle.numero_pallet,
-                    'calibre': detalle.calibre,
-                    'cantidad_cajas': detalle.cantidad_cajas,
-                    'costo': detalle.costo,
-                    'producto_nombre': detalle.producto.nombre if detalle.producto else 'No especificado',
-                    'calidad': detalle.get_calidad_display()
-                })
+        for d in obj.detalles.all():
+            detalles.append({
+                # Identificación
+                'uid': d.uid,
+                'numero_pallet': d.numero_pallet,
+                # Producto y BoxType (uids y nombres para selects)
+                'producto': d.producto.uid if d.producto else None,
+                'producto_nombre': d.producto.nombre if d.producto else None,
+                'box_type': d.box_type.uid if getattr(d, 'box_type', None) else None,
+                'box_type_nombre': d.box_type.nombre if getattr(d, 'box_type', None) else None,
+                # Atributos de calidad y clasificación
+                'variedad': d.variedad,
+                'calibre': d.calibre,
+                'calidad': d.calidad,
+                'calidad_display': d.get_calidad_display(),
+                'temperatura': d.temperatura,
+                'estado_maduracion': d.estado_maduracion,
+                # Cantidades y pesos
+                'cantidad_cajas': d.cantidad_cajas,
+                'peso_bruto': d.peso_bruto,
+                'peso_tara': getattr(d, 'peso_tara', None),
+                # Costos y pérdidas
+                'costo': d.costo,
+                'porcentaje_perdida_estimado': getattr(d, 'porcentaje_perdida_estimado', None),
+                # Concesión (heredado desde recepción pero útil para UI)
+                'en_concesion': getattr(d, 'en_concesion', getattr(obj, 'en_concesion', False)),
+                'comision_por_kilo': getattr(d, 'comision_por_kilo', getattr(obj, 'comision_por_kilo', 0)),
+                'fecha_limite_concesion': getattr(d, 'fecha_limite_concesion', getattr(obj, 'fecha_limite_concesion', None)),
+                # Referencia a lote creado (si existiese)
+                'lote_id': d.lote_creado.id if getattr(d, 'lote_creado', None) else None,
+            })
         return detalles
         
     def get_proveedor_info(self, obj):
@@ -1076,7 +1092,7 @@ class GoodsReceptionSerializer(serializers.ModelSerializer):
         fields = (
             'uid', 'numero_guia', 'fecha_recepcion', 'proveedor', 'proveedor_info', 'numero_guia_proveedor', 'recibido_por',
             'revisado_por', 'recibido_por_nombre', 'revisado_por_nombre', 'estado', 'observaciones', 'estado_pago', 
-            'total_pallets', 'total_cajas', 'total_peso_bruto', 'business', 'detalles',
+            'total_pallets', 'total_cajas', 'total_peso_bruto', 'business', 'detalles', 'detalles_data',
             'en_concesion', 'comision_por_kilo', 'fecha_limite_concesion',
         )
         # Excluir IDs que no se utilizan de la respuesta (solo para escritura)
