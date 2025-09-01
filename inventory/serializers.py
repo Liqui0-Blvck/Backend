@@ -882,12 +882,17 @@ class FruitLotSerializer(serializers.ModelSerializer):
     
     def get_porcentaje_vendido(self, obj):
         """Calcula el porcentaje del lote que ya ha sido vendido"""
-        if obj.peso_neto <= 0:
+        # Proteger cuando peso_neto es None o no positivo
+        try:
+            from decimal import Decimal as D
+            neto = D(str(obj.peso_neto or 0))
+            if neto <= 0:
+                return 0
+            vendido = D(str(self.get_peso_vendido(obj) or 0))
+            return round(float((vendido / neto) * 100), 2)
+        except Exception:
+            # En caso de cualquier problema de tipo/conversión, retornar 0 como valor seguro
             return 0
-        
-        peso_vendido = self.get_peso_vendido(obj)
-        from decimal import Decimal
-        return round((Decimal(str(peso_vendido)) / obj.peso_neto) * 100, 2)
         
     def get_propietario_original_nombre(self, obj):
         """Obtiene el nombre del propietario original para lotes en concesión"""
