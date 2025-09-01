@@ -348,12 +348,11 @@ class GoodsReception(BaseModel):
     
     # Relación con negocio
     business = models.ForeignKey('business.Business', on_delete=models.CASCADE)
-    
     history = HistoricalRecords()
     
     def __str__(self):
         return f"Recepción #{self.numero_guia} - {self.proveedor.nombre} ({self.fecha_recepcion.strftime('%d/%m/%Y')})"
-    
+
     def actualizar_totales(self):
         """
         Actualiza los totales basados en los detalles de la recepción y
@@ -368,12 +367,21 @@ class GoodsReception(BaseModel):
         monto_total = 0
         for detalle in detalles:
             if detalle.lote_creado:
-                # Si hay un lote vinculado, usar su peso_neto y costo_inicial
+                # Si hay un lote vinculado, usar su peso_neto y costo_inicial (para palta),
+                # o cantidad_cajas * costo_inicial (para otros productos)
                 lote = detalle.lote_creado
-                monto_total += float(lote.peso_neto) * float(lote.costo_inicial)
+                if getattr(lote.producto, 'tipo_producto', None) == 'palta':
+                    monto_total += float(lote.peso_neto or 0) * float(lote.costo_inicial or 0)
+                else:
+                    monto_total += float(lote.cantidad_cajas or 0) * float(lote.costo_inicial or 0)
             else:
-                # Si no hay lote vinculado, usar el peso_neto del detalle y su costo
-                monto_total += float(detalle.peso_neto) * float(detalle.costo)
+                # Si no hay lote vinculado: estimar según tipo de producto del detalle
+                tipo = getattr(detalle.producto, 'tipo_producto', None) if getattr(detalle, 'producto', None) else None
+                if tipo == 'palta':
+                    peso_neto_estimado = float(detalle.peso_bruto or 0) - float(detalle.peso_tara or 0)
+                    monto_total += max(peso_neto_estimado, 0) * float(detalle.costo or 0)
+                else:
+                    monto_total += float(detalle.cantidad_cajas or 0) * float(detalle.costo or 0)
         
         self.monto_total = monto_total
         self.save()
@@ -516,7 +524,7 @@ def crear_lotes_al_aprobar_recepcion(sender, instance, created, **kwargs):
                             box_type=detalle.box_type,
                             cantidad_cajas=detalle.cantidad_cajas,
                             peso_bruto=detalle.peso_bruto,
-                            peso_neto=detalle.peso_neto,
+                            # peso_neto será calculado en FruitLot.save() usando peso_bruto, box_type y pallet_type
                             business=instance.business,
                             fecha_ingreso=instance.fecha_recepcion.date() if instance.fecha_recepcion else None,
                             estado_maduracion=detalle.estado_maduracion or "verde",
@@ -572,7 +580,8 @@ def actualizar_lote_desde_detalle(sender, instance, created, **kwargs):
         # Actualizar campos relevantes
         lote.cantidad_cajas = instance.cantidad_cajas
         lote.peso_bruto = instance.peso_bruto
-        lote.peso_neto = instance.peso_neto
+        # No asignamos peso_neto desde ReceptionDetail porque no existe en el modelo.
+        # FruitLot recalculará peso_neto en save() si corresponde.
         # Sincronizar variedad desde el detalle si existe
         if getattr(instance, 'variedad', None) is not None:
             lote.variedad = instance.variedad

@@ -2,6 +2,7 @@ from django.db import models
 import uuid
 from datetime import datetime
 from decimal import Decimal
+import logging
 from core.models import BaseModel
 from simple_history.models import HistoricalRecords
 from django.utils.translation import gettext_lazy as _
@@ -310,6 +311,9 @@ class SaleItem(BaseModel):
     def save(self, *args, **kwargs):
         # Verificar si es un objeto nuevo (sin ID aún)
         is_new = self.pk is None
+        # Logger de trazabilidad de llamadas a save()
+        logger = logging.getLogger(__name__)
+        logger.info(f"SaleItem.save: start is_new={is_new}, update_fields={kwargs.get('update_fields')}")
         # Capturar valores previos para calcular deltas en updates
         prev_peso_vendido = None
         prev_unidades_vendidas = None
@@ -326,9 +330,7 @@ class SaleItem(BaseModel):
                 prev_peso_vendido = None
                 prev_unidades_vendidas = None
         
-        # Importar logging
-        import logging
-        logger = logging.getLogger(__name__)
+        
         
         # Validaciones de exclusividad y disponibilidad
         if is_new and not self.venta.cancelada:
@@ -357,6 +359,19 @@ class SaleItem(BaseModel):
         # Guardar el objeto
         super().save(*args, **kwargs)
         
+        # Si esta llamada es solo para actualizar campos seguros (p.ej. 'subtotal'),
+        # evitar ejecutar la lógica de inventario para prevenir efectos colaterales.
+        update_fields_kw = kwargs.get('update_fields')
+        if not self.venta.cancelada and not is_new and update_fields_kw:
+            try:
+                safe_fields = {'subtotal', 'updated_at'}
+                if set(update_fields_kw).issubset(safe_fields):
+                    logger.info("SaleItem.save: Guard clause - omitiendo actualización de inventario por update_fields solo de subtotal/updated_at")
+                    return
+            except Exception:
+                # Si hay cualquier problema evaluando update_fields, continuar con la lógica normal
+                pass
+
         # Actualizar inventario y estado (en creación y también en updates con deltas)
         if not self.venta.cancelada:
             # Actualizar el inventario del lote
@@ -407,7 +422,7 @@ class SaleItem(BaseModel):
                         self.lote.peso_neto = nuevo_peso
                         logger.info(f"SaleItem.save: Peso neto después: {self.lote.peso_neto}")
                 
-                # Para todos los productos, actualizar cajas
+                # Siempre descontar cajas según unidades_vendidas (los kilos no afectan las cajas)
                 # Calcular delta de unidades (solo descontar diferencia positiva)
                 if is_new:
                     delta_unidades = self.unidades_vendidas

@@ -69,50 +69,12 @@ def update_customer_balance(sender, instance, created, **kwargs):
 @receiver(post_save, sender=SaleItem)
 def update_fruit_lot_inventory(sender, instance, created, **kwargs):
     """
-    Señal que se activa después de guardar un SaleItem.
-    Actualiza el inventario del lote de fruta asociado, descontando
-    las cajas y kilos/unidades vendidos.
+    Deshabilitado: SaleItem.save() ya actualiza el inventario del Lote/Bin con deltas.
+    Mantener este signal haciendo early-return evita descuentos duplicados (p.ej., 2 cajas
+    en vez de 1 cuando se vende 1 caja) que ocurrían al ejecutar lógica en ambos lugares.
     """
-    if created:
-        try:
-            with transaction.atomic():
-                item = instance
-                lote = item.lote
-
-                if not lote:
-                    logger.warning(f"SaleItem {item.pk} no tiene lote asociado, no se actualiza inventario.")
-                    return
-
-                es_palta = lote.producto and lote.producto.tipo_producto == 'palta'
-
-                if es_palta:
-                    # Lógica para paltas (descontar cajas y peso)
-                    if item.unidades_vendidas > 0:
-                        lote.cantidad_cajas = max(0, lote.cantidad_cajas - item.unidades_vendidas)
-                    if item.peso_vendido > 0:
-                        lote.peso_neto = max(Decimal('0.0'), lote.peso_neto - item.peso_vendido)
-                    # Actualizar estado si se agotan las cajas
-                    if lote.cantidad_cajas <= 0:
-                        lote.estado_lote = 'agotado'
-                else:
-                    # Lógica para otros productos (descontar cajas y unidades)
-                    if item.unidades_vendidas > 0:
-                        lote.cantidad_cajas = max(0, lote.cantidad_cajas - item.unidades_vendidas)
-                        if hasattr(lote, 'cantidad_unidades'):
-                            # Asumimos que unidades_vendidas en SaleItem son las cajas
-                            unidades_a_descontar = item.unidades_vendidas * (lote.unidades_por_caja or 1)
-                            lote.cantidad_unidades = max(0, lote.cantidad_unidades - unidades_a_descontar)
-                    # Actualizar estado si se agotan las cajas o las unidades
-                    if lote.cantidad_cajas <= 0 or (hasattr(lote, 'cantidad_unidades') and lote.cantidad_unidades <= 0):
-                        lote.estado_lote = 'agotado'
-
-                lote.save()
-                logger.info(f"Inventario actualizado para Lote {lote.uid} via SaleItem {item.pk}: Cajas={lote.cantidad_cajas}, Peso={lote.peso_neto}, Unidades={getattr(lote, 'cantidad_unidades', 'N/A')}")
-
-        except Exception as e:
-            logger.error(f"Error al actualizar inventario para SaleItem {instance.pk}: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
+    # No hacer nada aquí para evitar doble descuento
+    return
 
 
 @receiver(m2m_changed, sender=CustomerPayment.ventas.through)

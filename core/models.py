@@ -16,4 +16,5 @@ class BaseModel(models.Model):
 
     class Meta:
         abstract = True
-        abstract = True
+        # Orden global por fecha de creación descendente
+        ordering = ['-created_at']

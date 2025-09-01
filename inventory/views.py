@@ -368,6 +368,10 @@ class GoodsReceptionViewSet(RolePermissionMixin, viewsets.ModelViewSet):
     queryset = GoodsReception.objects.all()
     lookup_field = 'uid'
     
+    def get_queryset(self):
+        qs = super().get_queryset()
+        return qs.order_by('-created_at')
+    
     def get_serializer_class(self):
         """Usa el serializer simplificado para listas y el completo para detalles"""
         if self.action == 'list':
@@ -439,34 +443,63 @@ class GoodsReceptionViewSet(RolePermissionMixin, viewsets.ModelViewSet):
             for i, detalle in enumerate(detalles):
                 try:
                     # Manejar producto por uid
-                    producto_uid = detalle.get('producto')
-                    print(f"Producto UID: {producto_uid}, tipo: {type(producto_uid)}")
-                    
-                    if producto_uid and not str(producto_uid).isdigit():
-                        from inventory.models import Product
+                    producto_val = detalle.get('producto')
+                    print(f"Producto valor: {producto_val}, tipo: {type(producto_val)}")
+                    # ReceptionDetailSerializer espera slug uid para 'producto'
+                    from inventory.models import Product
+                    if producto_val is None:
+                        errores_detalles.append({"detalle": i, "error": "Campo 'producto' es obligatorio"})
+                        continue
+                    if str(producto_val).isdigit():
+                        # Si viene como ID numérico, convertir a UID
                         try:
-                            producto = Product.objects.get(uid=producto_uid)
-                            detalle['producto'] = producto.id
-                            print(f"Producto encontrado con ID: {producto.id}")
+                            producto_obj = Product.objects.get(id=int(producto_val))
+                            detalle['producto'] = str(producto_obj.uid)
                         except Product.DoesNotExist:
-                            error_msg = f"Producto con UID {producto_uid} no encontrado"
+                            error_msg = f"Producto con ID {producto_val} no encontrado"
+                            print(error_msg)
+                            errores_detalles.append({"detalle": i, "error": error_msg})
+                            continue
+                    else:
+                        # Validar que el UID exista
+                        try:
+                            producto_obj = Product.objects.get(uid=producto_val)
+                            detalle['producto'] = str(producto_obj.uid)
+                        except Product.DoesNotExist:
+                            error_msg = f"Producto con UID {producto_val} no encontrado"
                             print(error_msg)
                             errores_detalles.append({"detalle": i, "error": error_msg})
                             continue
                     
-                    detalle['recepcion'] = recepcion.id
+                    # ReceptionDetailSerializer espera slug uid para 'recepcion'
+                    detalle['recepcion'] = str(recepcion.uid)
                     detalle['business'] = perfil.business.id
                     
                     # Imprimir para depuración
                     print(f"Detalle a validar: {detalle}")
                     
-                    detalle_serializer = ReceptionDetailSerializer(data=detalle)
-                    if detalle_serializer.is_valid():
-                        detalle_obj = detalle_serializer.save()
-                        detalles_creados.append(detalle_serializer.data)
+                    # Upsert por (recepcion, numero_pallet)
+                    numero_pallet = detalle.get('numero_pallet')
+                    if not numero_pallet:
+                        errores_detalles.append({"detalle": i, "error": "Campo 'numero_pallet' es obligatorio"})
+                        continue
+                    existente = ReceptionDetail.objects.filter(recepcion=recepcion, numero_pallet=numero_pallet).first()
+                    if existente:
+                        detalle_serializer = ReceptionDetailSerializer(existente, data=detalle, partial=True)
+                        if detalle_serializer.is_valid():
+                            detalle_serializer.save()
+                            detalles_creados.append(detalle_serializer.data)
+                        else:
+                            print(f"Errores de validación (update): {detalle_serializer.errors}")
+                            errores_detalles.append({"detalle": i, "error": detalle_serializer.errors})
                     else:
-                        print(f"Errores de validación: {detalle_serializer.errors}")
-                        errores_detalles.append({"detalle": i, "error": detalle_serializer.errors})
+                        detalle_serializer = ReceptionDetailSerializer(data=detalle)
+                        if detalle_serializer.is_valid():
+                            detalle_serializer.save()
+                            detalles_creados.append(detalle_serializer.data)
+                        else:
+                            print(f"Errores de validación (create): {detalle_serializer.errors}")
+                            errores_detalles.append({"detalle": i, "error": detalle_serializer.errors})
                 except Exception as e:
                     print(f"Error al procesar detalle {i}: {str(e)}")
                     errores_detalles.append({"detalle": i, "error": str(e)})
@@ -593,6 +626,46 @@ class ReceptionDetailViewSet(RolePermissionMixin, viewsets.ModelViewSet):
         for i, detalle_data in enumerate(detalles_data):
             # Asignar la recepción a cada detalle
             detalle_data['recepcion'] = recepcion.uid
+            # Normalizar 'producto' a UID, ya que el serializer espera slug_field='uid'
+            try:
+                from inventory.models import Product
+                producto_val = detalle_data.get('producto')
+                if producto_val is None:
+                    errores.append({
+                        'indice': i,
+                        'detalle': detalle_data,
+                        'error': "El campo 'producto' es obligatorio."
+                    })
+                    continue
+                if str(producto_val).isdigit():
+                    try:
+                        producto_obj = Product.objects.get(id=int(producto_val))
+                        detalle_data['producto'] = str(producto_obj.uid)
+                    except Product.DoesNotExist:
+                        errores.append({
+                            'indice': i,
+                            'detalle': detalle_data,
+                            'error': f"Producto con ID {producto_val} no encontrado"
+                        })
+                        continue
+                else:
+                    try:
+                        producto_obj = Product.objects.get(uid=producto_val)
+                        detalle_data['producto'] = str(producto_obj.uid)
+                    except Product.DoesNotExist:
+                        errores.append({
+                            'indice': i,
+                            'detalle': detalle_data,
+                            'error': f"Producto con UID {producto_val} no encontrado"
+                        })
+                        continue
+            except Exception as e:
+                errores.append({
+                    'indice': i,
+                    'detalle': detalle_data,
+                    'error': f"Error al normalizar producto: {str(e)}"
+                })
+                continue
             
             # Verificar si es una actualización o creación
             es_actualizacion = 'uid' in detalle_data and detalle_data['uid']
@@ -627,7 +700,7 @@ class ReceptionDetailViewSet(RolePermissionMixin, viewsets.ModelViewSet):
                             'error': 'Detalle no encontrado'
                         })
                 else:
-                    # Crear nuevo detalle
+                    # Crear nuevo detalle o actualizar si ya existe por (recepcion, numero_pallet)
                     # Validar campos obligatorios
                     if 'producto' not in detalle_data:
                         errores.append({
@@ -636,19 +709,42 @@ class ReceptionDetailViewSet(RolePermissionMixin, viewsets.ModelViewSet):
                             'error': "El campo 'producto' es obligatorio."
                         })
                         continue
-                    
-                    serializer = self.get_serializer(data=detalle_data)
-                    if serializer.is_valid(raise_exception=False):
-                        logger.info(f"Serializer válido para creación: {serializer.validated_data}")
-                        serializer.save()  # No pasar business aquí
-                        detalles_creados.append(serializer.data)
-                    else:
-                        logger.error(f"Error en serializer para creación: {serializer.errors}")
+                    # Upsert por (recepcion, numero_pallet)
+                    numero_pallet = detalle_data.get('numero_pallet')
+                    if not numero_pallet:
                         errores.append({
                             'indice': i,
                             'detalle': detalle_data,
-                            'error': serializer.errors
+                            'error': "El campo 'numero_pallet' es obligatorio."
                         })
+                        continue
+                    existente = ReceptionDetail.objects.filter(recepcion=recepcion, numero_pallet=numero_pallet).first()
+                    if existente:
+                        serializer = self.get_serializer(existente, data=detalle_data, partial=True)
+                        if serializer.is_valid(raise_exception=False):
+                            logger.info(f"Serializer válido para actualización por upsert: {serializer.validated_data}")
+                            serializer.save()
+                            detalles_actualizados.append(serializer.data)
+                        else:
+                            logger.error(f"Error en serializer para actualización por upsert: {serializer.errors}")
+                            errores.append({
+                                'indice': i,
+                                'detalle': detalle_data,
+                                'error': serializer.errors
+                            })
+                    else:
+                        serializer = self.get_serializer(data=detalle_data)
+                        if serializer.is_valid(raise_exception=False):
+                            logger.info(f"Serializer válido para creación: {serializer.validated_data}")
+                            serializer.save()  # No pasar business aquí
+                            detalles_creados.append(serializer.data)
+                        else:
+                            logger.error(f"Error en serializer para creación: {serializer.errors}")
+                            errores.append({
+                                'indice': i,
+                                'detalle': detalle_data,
+                                'error': serializer.errors
+                            })
             except Exception as e:
                 errores.append({
                     'indice': i,

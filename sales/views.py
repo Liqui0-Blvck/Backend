@@ -25,10 +25,9 @@ class CustomerViewSet(viewsets.ModelViewSet):
         perfil = getattr(user, 'perfil', None)
         if perfil is None:
             return Customer.objects.none()
-        
         # Filtrado base por negocio - siempre traemos todos los clientes del negocio
         queryset = Customer.objects.filter(business=perfil.business)
-        return queryset
+        return queryset.order_by('-created_at')
 
     def perform_create(self, serializer):
         # Asignar automáticamente el negocio del usuario autenticado
@@ -88,7 +87,7 @@ class SalePendingViewSet(viewsets.ModelViewSet):
                 Q(items__lote__propietario_original=proveedor)
             ).distinct()
 
-        return queryset.filter(created_at__range=[start_date, end_date])
+        return queryset.filter(created_at__range=[start_date, end_date]).order_by('-created_at')
 
     def perform_create(self, serializer):
         perfil = getattr(self.request.user, 'perfil', None)
@@ -114,7 +113,7 @@ class CustomerViewSet(viewsets.ModelViewSet):
         perfil = getattr(user, 'perfil', None)
         if perfil is None:
             return Customer.objects.none()
-        return Customer.objects.filter(business=perfil.business)
+        return Customer.objects.filter(business=perfil.business).order_by('-created_at')
 
 
 class CustomerPaymentViewSet(viewsets.ModelViewSet):
@@ -137,7 +136,7 @@ class CustomerPaymentViewSet(viewsets.ModelViewSet):
         if cliente_uid:
             queryset = queryset.filter(cliente__uid=cliente_uid)
         
-        return queryset
+        return queryset.order_by('-created_at')
 
     def perform_create(self, serializer):
         # Asignar automáticamente el negocio del usuario autenticado
@@ -341,7 +340,7 @@ class SaleViewSet(viewsets.ModelViewSet):
                 Q(items__lote__propietario_original=proveedor)
             ).distinct()
 
-        return queryset.filter(created_at__range=[start_date, end_date])
+        return queryset.filter(created_at__range=[start_date, end_date]).order_by('-created_at')
     
     def perform_create(self, serializer):
         # Asignar automáticamente el negocio del usuario autenticado

@@ -174,7 +174,12 @@ class SupplierSerializer(serializers.ModelSerializer):
                     'calibre': detalle.calibre or 'No especificado',
                     'cantidad_cajas': detalle.cantidad_cajas,
                     'peso_bruto': detalle.peso_bruto,
-                    'peso_neto': detalle.peso_neto,
+                    # ReceptionDetail no tiene campo peso_neto; usar el del lote si existe
+                    # o estimar como peso_bruto - peso_tara
+                    'peso_neto': (
+                        float(detalle.lote_creado.peso_neto) if getattr(detalle, 'lote_creado', None) and getattr(detalle.lote_creado, 'peso_neto', None) is not None
+                        else max(float(detalle.peso_bruto or 0) - float(getattr(detalle, 'peso_tara', 0) or 0), 0)
+                    ),
                     'calidad': detalle.get_calidad_display(),
                     'fecha_recepcion': recepcion.fecha_recepcion,
                     'numero_guia': recepcion.numero_guia,
@@ -702,9 +707,18 @@ class FruitLotSerializer(serializers.ModelSerializer):
         return reservas['total_kg'] or 0
 
     def get_peso_disponible(self, obj):
-        neto = float(obj.peso_neto or 0)
-        reservado = self.get_peso_reservado(obj)
-        return neto - reservado if neto > reservado else 0
+        # Usar Decimal para evitar mezclar float y Decimal
+        from decimal import Decimal as D
+        neto = D(obj.peso_neto or 0)
+        reservado_raw = self.get_peso_reservado(obj)
+        try:
+            reservado = D(reservado_raw)
+        except Exception:
+            reservado = D(str(reservado_raw or 0))
+        disponible = neto - reservado
+        if disponible < D('0'):
+            disponible = D('0')
+        return float(disponible)
 
     def get_tipo_producto(self, obj):
         if not obj.producto:

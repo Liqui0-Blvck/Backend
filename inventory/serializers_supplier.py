@@ -235,7 +235,12 @@ class SupplierSerializer(serializers.ModelSerializer):
                     'calibre': detalle.calibre or 'No especificado',
                     'cantidad_cajas': detalle.cantidad_cajas,
                     'peso_bruto': detalle.peso_bruto,
-                    'peso_neto': detalle.peso_neto,
+                    # ReceptionDetail no tiene campo peso_neto; usar el del lote si existe
+                    # o estimar como peso_bruto - peso_tara
+                    'peso_neto': (
+                        float(detalle.lote_creado.peso_neto) if getattr(detalle, 'lote_creado', None) and getattr(detalle.lote_creado, 'peso_neto', None) is not None
+                        else max(float(detalle.peso_bruto or 0) - float(getattr(detalle, 'peso_tara', 0) or 0), 0)
+                    ),
                     'calidad': detalle.get_calidad_display(),
                     'fecha_recepcion': recepcion.fecha_recepcion,
                     'numero_guia': recepcion.numero_guia,

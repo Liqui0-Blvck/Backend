@@ -697,6 +697,7 @@ class SaleSerializer(serializers.ModelSerializer):
             peso_vendido = D(raw.get('peso_vendido'))
             precio_unidad = D(raw.get('precio_unidad'))
             precio_kg = D(raw.get('precio_kg'))
+            subtotal_calc = (D(unidades_vendidas) * precio_unidad) + (peso_vendido * precio_kg)
 
             if lote_uid:
                 lote = FruitLot.objects.get(uid=lote_uid)
@@ -707,7 +708,8 @@ class SaleSerializer(serializers.ModelSerializer):
                     precio_unidad=precio_unidad,
                     peso_vendido=peso_vendido,
                     precio_kg=precio_kg,
-                    es_concesion=bool(raw.get('es_concesion', False))
+                    es_concesion=bool(raw.get('es_concesion', False)),
+                    subtotal=subtotal_calc
                 )
             else:
                 bin_obj = FruitBin.objects.get(uid=bin_uid)
@@ -718,12 +720,10 @@ class SaleSerializer(serializers.ModelSerializer):
                     precio_unidad=precio_unidad,
                     peso_vendido=peso_vendido,
                     precio_kg=precio_kg,
-                    es_concesion=False
+                    es_concesion=False,
+                    subtotal=subtotal_calc
                 )
 
-            if not getattr(item, 'subtotal', None) or item.subtotal == 0:
-                item.subtotal = (D(unidades_vendidas) * precio_unidad) + (peso_vendido * precio_kg)
-                item.save(update_fields=['subtotal'])
             total_venta += item.subtotal
 
         sale.total = total_venta
