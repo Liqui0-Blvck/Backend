@@ -967,7 +967,7 @@ class StockReservationSerializer(serializers.ModelSerializer):
         return None
 
 class ReceptionDetailSerializer(serializers.ModelSerializer):
-    recepcion = serializers.SlugRelatedField(queryset=GoodsReception.objects.all(), slug_field='uid')
+    recepcion = serializers.SlugRelatedField(queryset=GoodsReception.objects.all(), slug_field='uid', required=False, allow_null=True)
     producto = serializers.SlugRelatedField(queryset=Product.objects.all(), slug_field='uid')
     producto_nombre = serializers.SerializerMethodField()
     box_type = serializers.SlugRelatedField(queryset=BoxType.objects.all(), slug_field='uid', required=False, allow_null=True)
@@ -982,7 +982,8 @@ class ReceptionDetailSerializer(serializers.ModelSerializer):
         fields = (
             'uid', 'recepcion', 'producto', 'producto_nombre', 'variedad', 'calibre', 'box_type', 'numero_pallet', 'cantidad_cajas', 'peso_bruto',
             'peso_tara', 'calidad', 'temperatura', 'estado_maduracion',
-            'costo', 'porcentaje_perdida_estimado'
+            'costo', 'porcentaje_perdida_estimado',
+            'precio_sugerido_min', 'precio_sugerido_max'
         )
 
 class SupplierRelatedField(serializers.PrimaryKeyRelatedField):
@@ -1080,7 +1081,11 @@ class GoodsReceptionSerializer(serializers.ModelSerializer):
                 data['detalles'] = json.loads(detalles)
             except Exception:
                 raise serializers.ValidationError({'detalles': 'Debe ser un JSON válido.'})
-    
+
+        # Mapear 'detalles' de entrada al campo escribible 'detalles_data'
+        if 'detalles' in data and 'detalles_data' not in data:
+            data['detalles_data'] = data.get('detalles')
+
         # Convertir strings vacíos a None en campos de fecha
         fecha_limite = data.get('fecha_limite_concesion')
         if fecha_limite == '':
@@ -1118,7 +1123,7 @@ class GoodsReceptionSerializer(serializers.ModelSerializer):
         return None
 
     def create(self, validated_data):
-        detalles_data = validated_data.pop('detalles', [])
+        detalles_data = validated_data.pop('detalles_data', [])
         
         # Extraer campos de concesión de la recepción
         en_concesion = validated_data.get('en_concesion', False)
@@ -1132,12 +1137,14 @@ class GoodsReceptionSerializer(serializers.ModelSerializer):
             detalle_data['en_concesion'] = en_concesion
             detalle_data['comision_por_kilo'] = comision_por_kilo
             detalle_data['fecha_limite_concesion'] = fecha_limite_concesion
-            
+        
+            # detalle_data ya viene validado por ReceptionDetailSerializer, con FKs resueltos
             ReceptionDetail.objects.create(recepcion=recepcion, **detalle_data)
         return recepcion
 
     def update(self, instance, validated_data):
-        detalles_data = validated_data.pop('detalles', None)
+        # Usar la versión validada del nested serializer
+        detalles_data = validated_data.pop('detalles_data', None)
         
         # Extraer campos de concesión de la recepción
         en_concesion = validated_data.get('en_concesion', instance.en_concesion)
@@ -1157,6 +1164,7 @@ class GoodsReceptionSerializer(serializers.ModelSerializer):
                 detalle_data['comision_por_kilo'] = comision_por_kilo
                 detalle_data['fecha_limite_concesion'] = fecha_limite_concesion
                 
+                # detalle_data ya viene validado por ReceptionDetailSerializer, con FKs resueltos
                 ReceptionDetail.objects.create(recepcion=instance, **detalle_data)
         return instance
 
