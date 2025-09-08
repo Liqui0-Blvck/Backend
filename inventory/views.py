@@ -440,6 +440,15 @@ class GoodsReceptionViewSet(RolePermissionMixin, viewsets.ModelViewSet):
             # Imprimir para depuración
             print(f"Detalles recibidos: {detalles}")
             
+            # Capturar configuración de comisión desde la recepción
+            comision_base = data.get('comision_base')
+            comision_monto = data.get('comision_monto')
+            comision_porcentaje = data.get('comision_porcentaje')
+            en_concesion = data.get('en_concesion', False)
+            fecha_limite_concesion = data.get('fecha_limite_concesion')
+
+            comision_por_kilo_resuelta = None
+
             for i, detalle in enumerate(detalles):
                 try:
                     # Manejar producto por uid
@@ -478,6 +487,27 @@ class GoodsReceptionViewSet(RolePermissionMixin, viewsets.ModelViewSet):
                     # Imprimir para depuración
                     print(f"Detalle a validar: {detalle}")
                     
+                    # Calcular comisión por kilo si corresponde (base 'kg')
+                    try:
+                        from decimal import Decimal as D
+                        # Solo si la recepción está en concesión
+                        if en_concesion and (comision_base == 'kg'):
+                            # Preferir monto directo, sino calcular por porcentaje con costo del detalle
+                            if comision_monto not in (None, ''):
+                                detalle['comision_por_kilo'] = D(str(comision_monto))
+                                comision_por_kilo_resuelta = D(str(comision_monto))
+                            elif comision_porcentaje not in (None, ''):
+                                costo_det = detalle.get('costo')
+                                if costo_det not in (None, ''):
+                                    detalle['comision_por_kilo'] = D(str(costo_det)) * D(str(comision_porcentaje)) / D('100')
+                                    comision_por_kilo_resuelta = detalle['comision_por_kilo']
+                    except Exception:
+                        pass
+
+                    # Propagar flags de concesión a cada detalle
+                    detalle['en_concesion'] = en_concesion
+                    detalle['fecha_limite_concesion'] = fecha_limite_concesion
+
                     # Upsert por (recepcion, numero_pallet)
                     numero_pallet = detalle.get('numero_pallet')
                     if not numero_pallet:
@@ -506,15 +536,32 @@ class GoodsReceptionViewSet(RolePermissionMixin, viewsets.ModelViewSet):
             
             # Si hay errores en los detalles pero la recepción se creó, reportarlos
             if errores_detalles:
-                # Incluir los errores en la respuesta pero seguir con código 201 ya que la recepción se creó
-                respuesta = recepcion_serializer.data
-                respuesta['detalles'] = detalles_creados
+                # Re-serializar la recepción para que 'detalles' venga del GoodsReceptionSerializer (incluye comisión)
+                recepcion_refrescada = GoodsReception.objects.get(pk=recepcion.pk)
+                respuesta = self.get_serializer(recepcion_refrescada).data
                 respuesta['errores_detalles'] = errores_detalles
+                # Si resolvimos una comisión por kilo, reflejarla a nivel de recepción
+                try:
+                    if comision_por_kilo_resuelta is not None:
+                        recepcion.comision_por_kilo = comision_por_kilo_resuelta
+                        recepcion.save(update_fields=['comision_por_kilo'])
+                        # Recalcular serializer para incluir campo actualizado
+                        respuesta['comision_por_kilo'] = float(comision_por_kilo_resuelta)
+                except Exception:
+                    pass
                 return Response(respuesta, status=status.HTTP_201_CREATED)
             
-            # Si todo salió bien, devolver respuesta completa
-            respuesta = recepcion_serializer.data
-            respuesta['detalles'] = detalles_creados
+            # Si todo salió bien, devolver respuesta completa con 'detalles' ricos (incluye comisión)
+            recepcion_refrescada = GoodsReception.objects.get(pk=recepcion.pk)
+            respuesta = self.get_serializer(recepcion_refrescada).data
+            # Si resolvimos una comisión por kilo, reflejarla a nivel de recepción
+            try:
+                if comision_por_kilo_resuelta is not None:
+                    recepcion.comision_por_kilo = comision_por_kilo_resuelta
+                    recepcion.save(update_fields=['comision_por_kilo'])
+                    respuesta['comision_por_kilo'] = float(comision_por_kilo_resuelta)
+            except Exception:
+                pass
             
             return Response(respuesta, status=status.HTTP_201_CREATED)
             

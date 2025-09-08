@@ -10,8 +10,9 @@ from rest_framework.views import APIView
 
 from core.permissions import IsSameBusiness
 from inventory.models import FruitLot, StockReservation, GoodsReception, SupplierPayment
+from inventory.models import BoxType, FruitBin
 from sales.models import Sale, SalePending, SaleItem, SalePendingItem
-from shifts.models import Shift
+from shifts.models import Shift, ShiftExpense
 from accounts.models import Perfil
 
 # Reusar helper existente
@@ -226,6 +227,65 @@ class DashboardSummaryView(APIView):
             },
         }
 
+        # KPIs COMUNES (siempre visibles para el usuario en el header del dashboard)
+        # - cajas_vacias: suma de stock de cajas vacías en todas las tipologías
+        # - bins_bodega: conteo de bins existentes en la bodega del negocio
+        # - efectivo_vendido: total vendido en efectivo en el periodo
+        # - gastos_cantidad: número de gastos incurridos en el periodo
+        # - ventas_por_metodo_count: conteo de ventas por método de pago
+        try:
+            cajas_vacias_total = int(
+                BoxType.objects.filter(business=business).aggregate(total=Coalesce(Sum('stock_cajas_vacias'), 0))['total'] or 0
+            )
+        except Exception:
+            cajas_vacias_total = 0
+
+        try:
+            bins_bodega = int(FruitBin.objects.filter(business=business).count())
+        except Exception:
+            bins_bodega = 0
+
+        # Efectivo vendido en el periodo
+        ventas_efectivo_qs = (
+            Sale.objects.filter(business=business, cancelada=False, created_at__range=(start_dt, end_dt), metodo_pago='efectivo')
+        )
+        efectivo_vendido_val = ventas_efectivo_qs.aggregate(
+            total=Coalesce(Sum('total'), Value(0), output_field=DecimalField(max_digits=12, decimal_places=2))
+        )['total'] or Decimal('0')
+        efectivo_vendido_out = None if (not is_admin_like and role != 'Proveedor') else float(efectivo_vendido_val)
+
+        # Cantidad de gastos del periodo
+        gastos_cantidad = 0
+        try:
+            gastos_cantidad = int(
+                ShiftExpense.objects.filter(shift__business=business, fecha__range=(start_dt, end_dt)).count()
+            )
+        except Exception:
+            gastos_cantidad = 0
+
+        # Conteo de ventas por método de pago (independiente del enmascaramiento de montos)
+        ventas_por_metodo_count = {}
+        try:
+            ventas_por_metodo_qs = (
+                Sale.objects.filter(business=business, cancelada=False, created_at__range=(start_dt, end_dt))
+                .values('metodo_pago')
+                .annotate(cnt=Count('id'))
+                .order_by()
+            )
+            for row in ventas_por_metodo_qs:
+                ventas_por_metodo_count[row['metodo_pago']] = int(row['cnt'] or 0)
+        except Exception:
+            ventas_por_metodo_count = {}
+
+        kpis_comunes_block = {
+            "cajas_disponibles": int(cajas_disponibles),
+            "cajas_vacias": cajas_vacias_total,
+            "bins_bodega": bins_bodega,
+            "efectivo_vendido": efectivo_vendido_out,
+            "gastos_cantidad": gastos_cantidad,
+            "ventas_por_metodo_count": ventas_por_metodo_count,
+        }
+
         # RECEPCIONES DEL PROVEEDOR (o generales si no es proveedor)
         recepciones_qs = GoodsReception.objects.filter(
             business=business,
@@ -411,6 +471,7 @@ class DashboardSummaryView(APIView):
                 "top_n": top_n,
             },
             "user": user_block,
+            "kpis": kpis_comunes_block,
             "inventory": inventory_block,
             "ventas_hoy": ventas_block,
             "proveedor_recepciones": recepciones_block,

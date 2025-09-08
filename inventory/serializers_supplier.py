@@ -1,5 +1,7 @@
 from rest_framework import serializers
-from .models import Supplier, SupplierPayment, GoodsReception, ReceptionDetail, ConcessionSettlement, ConcessionSettlementDetail
+from .models import Supplier, SupplierPayment, GoodsReception, ReceptionDetail, ConcessionSettlement, ConcessionSettlementDetail, FruitBin
+from .fruit_bin_serializers import FruitBinListSerializer
+from .bin_to_lot_models import BinToLotTransformationDetail
 from django.db.models import Sum, Max, Count
 from accounts.models import Perfil
 
@@ -95,11 +97,15 @@ class SupplierSerializer(serializers.ModelSerializer):
     
     # Campos para detalles de pallets
     detalle_pallets = serializers.SerializerMethodField()
+    # Pallets originados desde bins del proveedor
+    detalle_pallets_desde_bins = serializers.SerializerMethodField()
     
     # Campos para análisis financiero
     resumen_pagos = serializers.SerializerMethodField()
     resumen_liquidaciones = serializers.SerializerMethodField()
     vinculado = serializers.SerializerMethodField()
+    # Bins del proveedor
+    detalle_bins = serializers.SerializerMethodField()
     
     class Meta:
         model = Supplier
@@ -108,7 +114,7 @@ class SupplierSerializer(serializers.ModelSerializer):
                  'total_deuda', 'total_pagado', 'recepciones_pendientes',
                  'cantidad_recepciones', 'cantidad_liquidaciones', 'cantidad_pallets', 'cantidad_cajas',
                  'total_kg_recepcionados', 'ultima_recepcion', 'ultima_liquidacion', 'ultimo_pago',
-                 'detalle_pallets', 'resumen_pagos', 'resumen_liquidaciones', 'vinculado')
+                 'detalle_pallets', 'detalle_pallets_desde_bins', 'detalle_bins', 'resumen_pagos', 'resumen_liquidaciones', 'vinculado')
     
     def get_total_deuda(self, obj):
         """Calcula la deuda total pendiente del proveedor"""
@@ -128,8 +134,8 @@ class SupplierSerializer(serializers.ModelSerializer):
     
     def get_recepciones_pendientes(self, obj):
         """Retorna las últimas 5 recepciones del proveedor con su estado"""
-        # Obtener todas las recepciones del proveedor, ordenadas por fecha (más recientes primero)
-        recepciones = obj.recepciones.all().order_by('-fecha_recepcion')[:5]
+        # Obtener recepciones del proveedor excluyendo rechazadas, ordenadas por fecha (más recientes primero)
+        recepciones = obj.recepciones.exclude(estado='rechazado').order_by('-fecha_recepcion')[:5]
         
         # Lista para almacenar las recepciones
         lista_recepciones = []
@@ -220,8 +226,8 @@ class SupplierSerializer(serializers.ModelSerializer):
     
     def get_detalle_pallets(self, obj):
         """Retorna información detallada de los pallets recibidos del proveedor"""
-        # Obtener todas las recepciones del proveedor
-        recepciones = obj.recepciones.all()
+        # Obtener recepciones del proveedor excluyendo rechazadas
+        recepciones = obj.recepciones.exclude(estado='rechazado')
         
         # Lista para almacenar los detalles de pallets
         detalles = []
@@ -248,6 +254,51 @@ class SupplierSerializer(serializers.ModelSerializer):
                 })
         
         return detalles
+
+    def get_detalle_pallets_desde_bins(self, obj):
+        """Retorna pallets (FruitLot) que se originaron desde bins pertenecientes a este proveedor.
+        Usa la trazabilidad BinToLotTransformationDetail -> Bin (proveedor) -> Transformación -> Lote.
+        """
+        try:
+            # Encontrar todos los lotes vinculados a transformaciones cuyos bins pertenecen a este proveedor
+            detalles = (
+                BinToLotTransformationDetail.objects
+                .select_related('transformacion', 'transformacion__lote', 'bin', 'bin__producto')
+                .filter(bin__proveedor=obj)
+                .order_by('-transformacion__fecha_transformacion')
+            )
+            resultado = []
+            vistos = set()
+            for d in detalles:
+                lote = getattr(d.transformacion, 'lote', None)
+                if not lote or lote.pk in vistos:
+                    continue
+                vistos.add(lote.pk)
+                resultado.append({
+                    'lote_uid': str(getattr(lote, 'uid', None)),
+                    'producto': getattr(getattr(lote, 'producto', None), 'nombre', 'No especificado'),
+                    'calibre': getattr(lote, 'calibre', None),
+                    'cantidad_cajas': getattr(lote, 'cantidad_cajas', None),
+                    'peso_bruto': getattr(lote, 'peso_bruto', None),
+                    'peso_neto': getattr(lote, 'peso_neto', None),
+                    'fecha_ingreso': getattr(lote, 'fecha_ingreso', None),
+                    'codigo': getattr(lote, 'qr_code', None),
+                    'origen': 'bin',
+                })
+            return resultado
+        except Exception:
+            return []
+
+    def get_detalle_bins(self, obj):
+        """Retorna bins pertenecientes al proveedor (excluye bins cuya recepción esté rechazada)."""
+        try:
+            qs = FruitBin.objects.filter(proveedor=obj)
+            # Excluir bins asociados a una recepción rechazada
+            qs = qs.exclude(recepcion__estado='rechazado')
+            serializer = FruitBinListSerializer(qs, many=True)
+            return serializer.data
+        except Exception:
+            return []
     
     def get_resumen_pagos(self, obj):
         """Retorna un resumen de los pagos realizados al proveedor"""

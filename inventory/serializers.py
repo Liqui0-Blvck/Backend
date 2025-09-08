@@ -983,7 +983,9 @@ class ReceptionDetailSerializer(serializers.ModelSerializer):
             'uid', 'recepcion', 'producto', 'producto_nombre', 'variedad', 'calibre', 'box_type', 'numero_pallet', 'cantidad_cajas', 'peso_bruto',
             'peso_tara', 'calidad', 'temperatura', 'estado_maduracion',
             'costo', 'porcentaje_perdida_estimado',
-            'precio_sugerido_min', 'precio_sugerido_max'
+            'precio_sugerido_min', 'precio_sugerido_max',
+            # Campos de concesión / comisión
+            'en_concesion', 'comision_por_kilo', 'fecha_limite_concesion'
         )
 
 class SupplierRelatedField(serializers.PrimaryKeyRelatedField):
@@ -1024,10 +1026,30 @@ class GoodsReceptionSerializer(serializers.ModelSerializer):
     revisado_por_nombre = serializers.SerializerMethodField()
     # Información básica del proveedor
     proveedor_info = serializers.SerializerMethodField()
+    # Nuevos campos para comisión flexible (sin migraciones)
+    # Los exponemos también en respuesta para que el frontend vea exactamente lo que envió
+    comision_base = serializers.CharField(required=False, allow_blank=True)  # 'kg'|'caja'|'unidad'|'venta' (eco)
+    comision_monto = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True)
+    comision_porcentaje = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, allow_null=True)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        try:
+            ctx = getattr(self, 'context', {}) or {}
+            commission_ctx = ctx.get('commission_input')
+            if commission_ctx:
+                # Permite que get_detalles y to_representation echen mano de los valores enviados
+                self._commission_input = commission_ctx
+        except Exception:
+            pass
 
     def get_detalles(self, obj):
         """Retorna detalles completos necesarios para editar/actualizar en frontend"""
         detalles = []
+        # Intentar recuperar base/valores virtuales enviados (si estamos en el mismo serializer del request)
+        base_in = getattr(self, '_commission_input', {}).get('comision_base')
+        monto_in = getattr(self, '_commission_input', {}).get('comision_monto')
+        porc_in = getattr(self, '_commission_input', {}).get('comision_porcentaje')
         for d in obj.detalles.all():
             detalles.append({
                 # Identificación
@@ -1048,14 +1070,33 @@ class GoodsReceptionSerializer(serializers.ModelSerializer):
                 # Cantidades y pesos
                 'cantidad_cajas': d.cantidad_cajas,
                 'peso_bruto': d.peso_bruto,
-                'peso_tara': getattr(d, 'peso_tara', None),
+                'peso_tara': getattr(d, 'peso_tara', 0),
                 # Costos y pérdidas
                 'costo': d.costo,
-                'porcentaje_perdida_estimado': getattr(d, 'porcentaje_perdida_estimado', None),
+                'porcentaje_perdida_estimado': d.porcentaje_perdida_estimado,
+                'precio_sugerido_min': d.precio_sugerido_min,
+                'precio_sugerido_max': d.precio_sugerido_max,
                 # Concesión (heredado desde recepción pero útil para UI)
                 'en_concesion': getattr(d, 'en_concesion', getattr(obj, 'en_concesion', False)),
                 'comision_por_kilo': getattr(d, 'comision_por_kilo', getattr(obj, 'comision_por_kilo', 0)),
                 'fecha_limite_concesion': getattr(d, 'fecha_limite_concesion', getattr(obj, 'fecha_limite_concesion', None)),
+                # Campos de comisión para UI
+                'comision_base': (
+                    'kg' if getattr(d.producto, 'tipo_producto', None) == 'palta' else (base_in or getattr(self, '_commission_resolved', {}).get('comision_base'))
+                ),
+                'comision_monto': (
+                    float(getattr(d, 'comision_por_kilo', getattr(obj, 'comision_por_kilo', 0)) or 0)
+                    if getattr(d.producto, 'tipo_producto', None) == 'palta' else (
+                        float(monto_in) if monto_in not in (None, '') else None
+                    )
+                ),
+                'comision_porcentaje': (
+                    round(
+                        (float(getattr(d, 'comision_por_kilo', getattr(obj, 'comision_por_kilo', 0)) or 0) / float(d.costo)) * 100, 4
+                    ) if getattr(d.producto, 'tipo_producto', None) == 'palta' and float(d.costo or 0) > 0 else (
+                        float(porc_in) if porc_in not in (None, '') else None
+                    )
+                ),
                 # Referencia a lote creado (si existiese)
                 'lote_id': d.lote_creado.id if getattr(d, 'lote_creado', None) else None,
             })
@@ -1094,6 +1135,13 @@ class GoodsReceptionSerializer(serializers.ModelSerializer):
         fecha_recepcion = data.get('fecha_recepcion')
         if fecha_recepcion == '':
             data['fecha_recepcion'] = None
+        
+        # Capturar comisión virtual de entrada para eco en respuesta
+        self._commission_input = {
+            'comision_base': data.get('comision_base'),
+            'comision_monto': data.get('comision_monto'),
+            'comision_porcentaje': data.get('comision_porcentaje'),
+        }
             
         return super().to_internal_value(data)
 
@@ -1104,6 +1152,8 @@ class GoodsReceptionSerializer(serializers.ModelSerializer):
             'revisado_por', 'recibido_por_nombre', 'revisado_por_nombre', 'estado', 'observaciones', 'estado_pago', 
             'total_pallets', 'total_cajas', 'total_peso_bruto', 'business', 'detalles', 'detalles_data',
             'en_concesion', 'comision_por_kilo', 'fecha_limite_concesion',
+            # Campos virtuales de comisión
+            'comision_base', 'comision_monto', 'comision_porcentaje',
         )
         # Excluir IDs que no se utilizan de la respuesta (solo para escritura)
         extra_kwargs = {
@@ -1129,7 +1179,43 @@ class GoodsReceptionSerializer(serializers.ModelSerializer):
         en_concesion = validated_data.get('en_concesion', False)
         comision_por_kilo = validated_data.get('comision_por_kilo', 0)
         fecha_limite_concesion = validated_data.get('fecha_limite_concesion', None)
-        
+
+        # Resolver comisión flexible (solo base 'kg' sin migraciones)
+        base = (self.initial_data or {}).get('comision_base') or 'kg'
+        monto_in = (self.initial_data or {}).get('comision_monto')
+        porc_in = (self.initial_data or {}).get('comision_porcentaje')
+        try:
+            from decimal import Decimal as D
+            if base == 'kg':
+                if monto_in not in (None, ''):
+                    comision_por_kilo = D(str(monto_in))
+                elif porc_in not in (None, ''):
+                    # Buscar costo de referencia en el primer detalle palta
+                    costo_ref = None
+                    for dd in detalles_data:
+                        prod = dd.get('producto')
+                        if prod and getattr(prod, 'tipo_producto', None) == 'palta':
+                            costo_ref = dd.get('costo', None)
+                            break
+                    if costo_ref is not None:
+                        comision_por_kilo = D(str(costo_ref)) * D(str(porc_in)) / D('100')
+            # Si se resolvió comisión, setearla también a nivel de recepción
+            if comision_por_kilo is not None:
+                validated_data['comision_por_kilo'] = comision_por_kilo
+            # Guardar lo que resolvimos para eco
+            self._commission_resolved = {
+                'comision_base': base,
+                'comision_monto': monto_in,
+                'comision_porcentaje': porc_in,
+            }
+        except Exception:
+            pass
+
+        # Remover campos virtuales de comisión antes de crear el modelo
+        validated_data.pop('comision_base', None)
+        validated_data.pop('comision_monto', None)
+        validated_data.pop('comision_porcentaje', None)
+
         recepcion = GoodsReception.objects.create(**validated_data)
         
         for detalle_data in detalles_data:
@@ -1150,11 +1236,47 @@ class GoodsReceptionSerializer(serializers.ModelSerializer):
         en_concesion = validated_data.get('en_concesion', instance.en_concesion)
         comision_por_kilo = validated_data.get('comision_por_kilo', instance.comision_por_kilo)
         fecha_limite_concesion = validated_data.get('fecha_limite_concesion', instance.fecha_limite_concesion)
-        
+
+        # Resolver comisión flexible al actualizar (solo base 'kg')
+        base = (self.initial_data or {}).get('comision_base') or 'kg'
+        monto_in = (self.initial_data or {}).get('comision_monto')
+        porc_in = (self.initial_data or {}).get('comision_porcentaje')
+        try:
+            from decimal import Decimal as D
+            if base == 'kg':
+                if monto_in not in (None, ''):
+                    comision_por_kilo = D(str(monto_in))
+                elif porc_in not in (None, ''):
+                    # Intentar usar detalles_data si viene, sino usar los existentes
+                    detalles_iter = detalles_data if detalles_data is not None else instance.detalles.all()
+                    costo_ref = None
+                    for dd in detalles_iter:
+                        # dd es dict (cuando viene detalles_data) o modelo (cuando usamos existentes)
+                        prod = (dd.get('producto') if isinstance(dd, dict) else getattr(dd, 'producto', None))
+                        if prod and getattr(prod, 'tipo_producto', None) == 'palta':
+                            costo_ref = (dd.get('costo') if isinstance(dd, dict) else getattr(dd, 'costo', None))
+                            break
+                    if costo_ref is not None:
+                        comision_por_kilo = D(str(costo_ref)) * D(str(porc_in)) / D('100')
+            # Guardar lo que resolvimos para eco
+            self._commission_resolved = {
+                'comision_base': base,
+                'comision_monto': monto_in,
+                'comision_porcentaje': porc_in,
+            }
+        except Exception:
+            pass
+
+        # Remover campos virtuales de comisión antes de aplicar en el modelo
+        validated_data.pop('comision_base', None)
+        validated_data.pop('comision_monto', None)
+        validated_data.pop('comision_porcentaje', None)
+
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
         
+        # Si se enviaron detalles, reemplazar por completo
         if detalles_data is not None:
             # Elimina los detalles anteriores y crea los nuevos
             instance.detalles.all().delete()
@@ -1167,6 +1289,40 @@ class GoodsReceptionSerializer(serializers.ModelSerializer):
                 # detalle_data ya viene validado por ReceptionDetailSerializer, con FKs resueltos
                 ReceptionDetail.objects.create(recepcion=instance, **detalle_data)
         return instance
+
+    def to_representation(self, instance):
+        """Incluye los campos virtuales de comisión en la respuesta.
+        - Si base == 'kg' y hay datos, intenta calcular porcentaje/monto desde comision_por_kilo y costos.
+        - Si no hay detalles o la base no es 'kg', eco de lo enviado por el cliente.
+        """
+        data = super().to_representation(instance)
+        base_in = getattr(self, '_commission_input', {}).get('comision_base')
+        monto_in = getattr(self, '_commission_input', {}).get('comision_monto')
+        porc_in = getattr(self, '_commission_input', {}).get('comision_porcentaje')
+        resolved = getattr(self, '_commission_resolved', {})
+
+        base = resolved.get('comision_base') or base_in or 'kg'
+        data['comision_base'] = base
+
+        # Valores por defecto desde entrada
+        data['comision_monto'] = float(monto_in) if monto_in not in (None, '') else None
+        data['comision_porcentaje'] = float(porc_in) if porc_in not in (None, '') else None
+
+        try:
+            # Si tenemos comision_por_kilo y base es 'kg', intentar calcular inversas
+            if base == 'kg':
+                cpk = instance.comision_por_kilo
+                if cpk is not None:
+                    data['comision_monto'] = float(cpk)
+                    # Buscar costo de referencia de cualquier detalle (si existe)
+                    d = instance.detalles.first()
+                    costo = getattr(d, 'costo', None) if d else None
+                    if costo and float(costo) > 0:
+                        data['comision_porcentaje'] = round(float(cpk) / float(costo) * 100, 4)
+        except Exception:
+            pass
+
+        return data
 
 class SupplierPaymentSerializer(serializers.ModelSerializer):
     metodo_pago_display = serializers.CharField(source='get_metodo_pago_display', read_only=True)
