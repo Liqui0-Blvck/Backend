@@ -277,8 +277,15 @@ class GoodsReception(BaseModel):
                                       help_text="Indica si la mercancía está en concesión")
     comision_por_kilo = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True,
                                           help_text="Comisión por kilo vendido (para mercancía en concesión)")
+    comision_base = models.CharField(max_length=16, null=True, blank=True,
+                                     help_text="Base de comisión: kg|caja|unidad|venta")
+    comision_monto = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True,
+                                         help_text="Monto de comisión según la base seleccionada")
+    comision_porcentaje = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True,
+                                              help_text="Porcentaje de comisión (0-100)")
     fecha_limite_concesion = models.DateField(null=True, blank=True,
                                             help_text="Fecha límite para vender la mercancía en concesión")
+    
     ESTADO_CHOICES = [
         ("pendiente", "Pendiente de revisión"),
         ("revisado", "Revisado"),
@@ -733,6 +740,13 @@ class FruitBin(BaseModel):
                                          help_text="Costo por kg del bin")
     costo_total = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True,
                                       help_text="Costo total del bin (opcional; si no se define se calcula)")
+    
+    # Concesión (para ventas y liquidaciones manuales)
+    en_concesion = models.BooleanField(default=False, help_text="Indica si el bin está en concesión")
+    comision_por_kilo = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True,
+                                            help_text="Comisión por kilo para bin en concesión")
+    fecha_limite_concesion = models.DateField(null=True, blank=True,
+                                              help_text="Fecha límite para vender el bin en concesión")
     
     def save(self, *args, **kwargs):
         """Mantiene peso_neto sincronizado con peso_bruto y peso_tara."""
