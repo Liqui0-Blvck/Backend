@@ -13,7 +13,7 @@ from accounts.models import Perfil
 # Importaciones de modelos
 from sales.models import Sale, SaleItem, SalePendingItem
 from inventory.models import FruitLot, StockReservation, Product
-from shifts.models import Shift
+from shifts.models import Shift, ShiftExpense
 
 # Importaciones de utilidades
 from scripts.maduration_pricing import calculate_maduration_price
@@ -65,9 +65,25 @@ class ReportSummaryView(APIView):
         rango_mes = (datetime.combine(inicio_mes, time.min), datetime.combine(hoy, time.max))
         
         # Helper para calcular métricas por período considerando ambos tipos de productos
-        def calcular_metricas(qs_ventas):
+        def calcular_metricas(qs_ventas, rango_fechas=None):
             total_ventas = qs_ventas.count()
             ingresos = qs_ventas.aggregate(total=Sum('total'))['total'] or 0
+            
+            # Calcular ventas en efectivo
+            ventas_efectivo = qs_ventas.filter(metodo_pago='efectivo').aggregate(total=Sum('total'))['total'] or 0
+            
+            # Calcular gastos en efectivo si se proporciona un rango de fechas
+            gastos_efectivo = 0
+            if rango_fechas:
+                gastos_efectivo = ShiftExpense.objects.filter(
+                    business=business,
+                    metodo_pago='efectivo',
+                    fecha__range=rango_fechas
+                ).aggregate(total=Sum('monto'))['total'] or 0
+            
+            # Calcular efectivo neto (ventas en efectivo - gastos en efectivo)
+            efectivo_neto = ventas_efectivo - gastos_efectivo
+            
             # Paltas por kg
             kg_paltas = SaleItem.objects.filter(
                 venta__in=qs_ventas,
@@ -81,6 +97,9 @@ class ReportSummaryView(APIView):
             return {
                 'total_ventas': total_ventas,
                 'total_ingresos': ingresos,
+                'ventas_efectivo': ventas_efectivo,
+                'gastos_efectivo': gastos_efectivo,
+                'efectivo_neto': efectivo_neto,
                 # Backward-compatible keys
                 'total_kg': kg_paltas,
                 'total_cajas': unidades_otros,
@@ -103,19 +122,19 @@ class ReportSummaryView(APIView):
         ventas_hoy = ventas_filtradas_por_proveedor(
             Sale.objects.filter(business=business, cancelada=False, created_at__range=rango_hoy)
         )
-        m_hoy = calcular_metricas(ventas_hoy)
+        m_hoy = calcular_metricas(ventas_hoy, rango_hoy)
 
         # Ventas de esta semana
         ventas_semana = ventas_filtradas_por_proveedor(
             Sale.objects.filter(business=business, cancelada=False, created_at__range=rango_semana)
         )
-        m_semana = calcular_metricas(ventas_semana)
+        m_semana = calcular_metricas(ventas_semana, rango_semana)
 
         # Ventas de este mes
         ventas_mes = ventas_filtradas_por_proveedor(
             Sale.objects.filter(business=business, cancelada=False, created_at__range=rango_mes)
         )
-        m_mes = calcular_metricas(ventas_mes)
+        m_mes = calcular_metricas(ventas_mes, rango_mes)
 
         # Total histórico
         ventas_total = ventas_filtradas_por_proveedor(

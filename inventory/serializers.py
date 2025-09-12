@@ -1498,30 +1498,66 @@ class PalletHistoryDetailSerializer(serializers.ModelSerializer):
         return ventas.aggregate(total=Sum('unidades_vendidas'))['total'] or 0
         
     def get_costo_total_pallet(self, obj):
-        """Calcula el costo total del pallet según su tipo"""
+        """Calcula el costo total del pallet según su tipo, usando el peso histórico"""
         if not obj.producto:
             return 0.0
             
         try:
+            # Obtener el resumen de ventas que ya tiene calculado el costo vendido
+            resumen = self.get_resumen_ventas(obj)
+            if resumen and 'costo_vendido' in resumen:
+                return float(resumen['costo_vendido'])
+                
+            # Si no podemos obtener el costo desde el resumen, calcularlo manualmente
             if obj.producto.tipo_producto == 'palta':
-                # Para paltas, el costo es por peso neto (peso vendible)
-                # Usamos el peso neto ya que es el peso real vendible
-                peso_neto = float(obj.peso_neto or 0)
+                # Para paltas, usamos el peso vendido total del campo datos_especificos
+                datos_especificos = self.get_datos_especificos(obj)
+                if datos_especificos and 'peso_vendido_total' in datos_especificos:
+                    peso_vendido_total = float(datos_especificos['peso_vendido_total'])
+                    costo_inicial = float(obj.costo_inicial or 0)
+                    return round(peso_vendido_total * costo_inicial, 2)
+                
+                # Si no está en datos_especificos, calcularlo desde las ventas
+                from django.db.models import Sum
+                ventas = SaleItem.objects.filter(lote=obj)
+                peso_vendido_total = ventas.aggregate(total=Sum('peso_vendido'))['total'] or 0
                 costo_inicial = float(obj.costo_inicial or 0)
                 
-                # Si tenemos datos específicos en datos_especificos, los usamos
-                datos_especificos = self.get_datos_especificos(obj)
-                if datos_especificos and 'peso_neto' in datos_especificos and datos_especificos['peso_neto'] > 0:
-                    peso_neto = datos_especificos['peso_neto']
+                # Si no hay ventas registradas, usamos el peso bruto menos la tara estimada
+                if peso_vendido_total == 0:
+                    # Estimamos el peso neto original basado en el peso bruto
+                    peso_bruto = float(obj.peso_bruto or 0)
+                    tara_estimada = 0
+                    if obj.box_type:
+                        tara_estimada += float(obj.box_type.peso_caja or 0) * float(obj.cantidad_cajas or 1)
+                    if obj.pallet_type:
+                        tara_estimada += float(obj.pallet_type.peso_pallet or 0)
+                    peso_vendido_total = max(0, peso_bruto - tara_estimada)
                 
-                return round(peso_neto * costo_inicial, 2)
+                return round(peso_vendido_total * costo_inicial, 2)
             else:  # tipo 'otro'
-                # Para otros productos, el costo es por cantidad de unidades
-                cantidad_unidades = float(obj.cantidad_unidades or 0)
-                costo_por_unidad = float(obj.costo_inicial or 0) / max(1, obj.unidades_por_caja)
-                return round(cantidad_unidades * costo_por_unidad, 2)
-        except (TypeError, ValueError):
-            # En caso de error de conversión, devolver 0
+                # Para otros productos, el costo es por cantidad de unidades históricas
+                from django.db.models import Sum
+                ventas = SaleItem.objects.filter(lote=obj)
+                unidades_vendidas_total = ventas.aggregate(total=Sum('unidades_vendidas'))['total'] or 0
+                
+                # Si no hay ventas registradas, usamos la cantidad de unidades original
+                if unidades_vendidas_total == 0:
+                    unidades_vendidas_total = float(obj.cantidad_unidades or 0)
+                
+                costo_por_unidad = float(obj.costo_inicial or 0) / max(1, obj.unidades_por_caja or 1)
+                return round(unidades_vendidas_total * costo_por_unidad, 2)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error calculando costo total del pallet: {str(e)}")
+            # En caso de error, devolver el costo vendido del resumen si está disponible
+            try:
+                resumen = self.get_resumen_ventas(obj)
+                if resumen and 'costo_vendido' in resumen:
+                    return float(resumen['costo_vendido'])
+            except Exception:
+                pass
             return 0.0
     
     def get_resumen_ventas(self, obj):

@@ -4,6 +4,7 @@ from .fruit_bin_serializers import FruitBinListSerializer
 from .bin_to_lot_models import BinToLotTransformationDetail
 from django.db.models import Sum, Max, Count
 from accounts.models import Perfil
+from sales.models import SaleItem
 
 
 class SupplierSerializerList(serializers.ModelSerializer):
@@ -106,6 +107,11 @@ class SupplierSerializer(serializers.ModelSerializer):
     vinculado = serializers.SerializerMethodField()
     # Bins del proveedor
     detalle_bins = serializers.SerializerMethodField()
+
+    # Nuevos KPIs de ventas
+    ventas_por_recepcion = serializers.SerializerMethodField()
+    ventas_totales = serializers.SerializerMethodField()
+    ventas_desde_transformados = serializers.SerializerMethodField()
     
     class Meta:
         model = Supplier
@@ -114,7 +120,8 @@ class SupplierSerializer(serializers.ModelSerializer):
                  'total_deuda', 'total_pagado', 'recepciones_pendientes',
                  'cantidad_recepciones', 'cantidad_liquidaciones', 'cantidad_pallets', 'cantidad_cajas',
                  'total_kg_recepcionados', 'ultima_recepcion', 'ultima_liquidacion', 'ultimo_pago',
-                 'detalle_pallets', 'detalle_pallets_desde_bins', 'detalle_bins', 'resumen_pagos', 'resumen_liquidaciones', 'vinculado')
+                 'detalle_pallets', 'detalle_pallets_desde_bins', 'detalle_bins', 'resumen_pagos', 'resumen_liquidaciones', 'vinculado',
+                 'ventas_por_recepcion', 'ventas_totales', 'ventas_desde_transformados')
     
     def get_total_deuda(self, obj):
         """Calcula la deuda total pendiente del proveedor"""
@@ -299,6 +306,97 @@ class SupplierSerializer(serializers.ModelSerializer):
             return serializer.data
         except Exception:
             return []
+
+    def _aggregate_ventas_qs(self, saleitems_qs):
+        """Helper: agrega métricas de ventas para un queryset de SaleItem."""
+        total_monto = saleitems_qs.aggregate(total=Sum('subtotal'))['total'] or 0
+        total_kg = saleitems_qs.aggregate(total=Sum('peso_vendido'))['total'] or 0
+        total_cajas = saleitems_qs.aggregate(total=Sum('unidades_vendidas'))['total'] or 0
+        ventas_count = saleitems_qs.values('venta').distinct().count()
+        return {
+            'ventas': int(ventas_count),
+            'kg_vendidos': float(total_kg or 0),
+            'cajas_vendidas': int(total_cajas or 0),
+            'monto_total': float(total_monto or 0),
+        }
+
+    def get_ventas_por_recepcion(self, obj):
+        """Ventas de productos del proveedor separadas por cada recepción y con detalle por lote."""
+        resultados = []
+        recepciones = obj.recepciones.exclude(estado='rechazado').order_by('-fecha_recepcion')
+        for recepcion in recepciones:
+            lot_ids = list(
+                recepcion.detalles.exclude(lote_creado__isnull=True).values_list('lote_creado_id', flat=True)
+            )
+            if not lot_ids:
+                resultados.append({
+                    'recepcion_uid': recepcion.uid,
+                    'numero_guia': recepcion.numero_guia,
+                    'fecha_recepcion': recepcion.fecha_recepcion,
+                    'resumen': {'ventas': 0, 'kg_vendidos': 0.0, 'cajas_vendidas': 0, 'monto_total': 0.0},
+                    'por_lote': []
+                })
+                continue
+            items_qs = SaleItem.objects.filter(lote_id__in=lot_ids)
+            resumen = self._aggregate_ventas_qs(items_qs)
+            por_lote = []
+            items_por_lote = items_qs.values('lote_id').annotate(
+                monto=Sum('subtotal'),
+                kg=Sum('peso_vendido'),
+                cajas=Sum('unidades_vendidas'),
+                ventas=Count('venta', distinct=True)
+            )
+            detalles_map = {d.lote_creado_id: d for d in recepcion.detalles.all() if getattr(d, 'lote_creado_id', None)}
+            for row in items_por_lote:
+                d = detalles_map.get(row['lote_id'])
+                por_lote.append({
+                    'lote_id': row['lote_id'],
+                    'producto': getattr(getattr(d, 'producto', None), 'nombre', None) if d else None,
+                    'calibre': getattr(d, 'calibre', None) if d else None,
+                    'cantidad_cajas_recepcionadas': getattr(d, 'cantidad_cajas', None) if d else None,
+                    'monto_total': float(row['monto'] or 0),
+                    'kg_vendidos': float(row['kg'] or 0),
+                    'cajas_vendidas': int(row['cajas'] or 0),
+                    'ventas': int(row['ventas'] or 0),
+                })
+            resultados.append({
+                'recepcion_uid': recepcion.uid,
+                'numero_guia': recepcion.numero_guia,
+                'fecha_recepcion': recepcion.fecha_recepcion,
+                'resumen': resumen,
+                'por_lote': por_lote,
+            })
+        return resultados
+
+    def get_ventas_totales(self, obj):
+        """Totales de ventas considerando todos los lotes recepcionados del proveedor."""
+        lot_ids = []
+        for r in obj.recepciones.exclude(estado='rechazado').all():
+            lot_ids.extend(list(r.detalles.exclude(lote_creado__isnull=True).values_list('lote_creado_id', flat=True)))
+        if not lot_ids:
+            return {'ventas': 0, 'kg_vendidos': 0.0, 'cajas_vendidas': 0, 'monto_total': 0.0}
+        items_qs = SaleItem.objects.filter(lote_id__in=lot_ids)
+        return self._aggregate_ventas_qs(items_qs)
+
+    def get_ventas_desde_transformados(self, obj):
+        """Ventas de lotes que se originaron desde bins de este proveedor (post-transformación)."""
+        detalles = (
+            BinToLotTransformationDetail.objects
+            .select_related('transformacion', 'transformacion__lote')
+            .filter(bin__proveedor=obj)
+        )
+        lot_ids = []
+        vistos = set()
+        for d in detalles:
+            lote = getattr(d.transformacion, 'lote', None)
+            if not lote or lote.pk in vistos:
+                continue
+            vistos.add(lote.pk)
+            lot_ids.append(lote.pk)
+        if not lot_ids:
+            return {'ventas': 0, 'kg_vendidos': 0.0, 'cajas_vendidas': 0, 'monto_total': 0.0}
+        items_qs = SaleItem.objects.filter(lote_id__in=lot_ids)
+        return self._aggregate_ventas_qs(items_qs)
     
     def get_resumen_pagos(self, obj):
         """Retorna un resumen de los pagos realizados al proveedor"""

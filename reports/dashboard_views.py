@@ -252,7 +252,23 @@ class DashboardSummaryView(APIView):
         efectivo_vendido_val = ventas_efectivo_qs.aggregate(
             total=Coalesce(Sum('total'), Value(0), output_field=DecimalField(max_digits=12, decimal_places=2))
         )['total'] or Decimal('0')
-        efectivo_vendido_out = None if (not is_admin_like and role != 'Proveedor') else float(efectivo_vendido_val)
+        
+        # Gastos en efectivo del periodo
+        gastos_efectivo_val = Decimal('0')
+        try:
+            gastos_efectivo_val = ShiftExpense.objects.filter(
+                shift__business=business, 
+                fecha__range=(start_dt, end_dt),
+                metodo_pago='efectivo'
+            ).aggregate(
+                total=Coalesce(Sum('monto'), Value(0), output_field=DecimalField(max_digits=12, decimal_places=2))
+            )['total'] or Decimal('0')
+        except Exception:
+            gastos_efectivo_val = Decimal('0')
+            
+        # Efectivo neto (ventas - gastos)
+        efectivo_neto_val = efectivo_vendido_val - gastos_efectivo_val
+        efectivo_vendido_out = None if (not is_admin_like and role != 'Proveedor') else float(efectivo_neto_val)
 
         # Cantidad de gastos del periodo
         gastos_cantidad = 0

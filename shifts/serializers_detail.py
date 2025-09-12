@@ -763,6 +763,7 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
     def get_caja_resumen(self, obj):
         """
         Resumen de caja del turno: ventas y gastos por método, neto, cajas, y comparación con cierre declarado.
+        Incluye cálculo de efectivo vendido del turno, descontando los gastos del turno.
         """
         fecha_inicio = obj.fecha_apertura
         fecha_fin = obj.fecha_cierre or timezone.now()
@@ -791,6 +792,15 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
         metodos = set(list(ventas_por_metodo.keys()) + list(gastos_por_metodo.keys()))
         neto_por_metodo = {m: float(ventas_por_metodo.get(m, 0)) - float(gastos_por_metodo.get(m, 0)) for m in metodos}
 
+        # Efectivo vendido del turno (efectivo de ventas - gastos en efectivo)
+        efectivo_ventas = float(ventas_por_metodo.get('efectivo', 0))
+        gastos_efectivo = float(gastos_por_metodo.get('efectivo', 0))
+        efectivo_neto = efectivo_ventas - gastos_efectivo
+
+        # Saldo inicial + efectivo neto = efectivo esperado en caja
+        saldo_inicial = float(obj.saldo_inicial or 0)
+        efectivo_esperado = saldo_inicial + efectivo_neto
+
         # Declarado (solo efectivo) si existe cierre
         declarado = None
         diferencias = None
@@ -804,10 +814,9 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
                 'fecha_cierre_caja': closing.fecha_cierre_caja,
                 'cerrado_por': closing.cerrado_por.id,
             }
-            # Diferencia solo para efectivo
-            efectivo_registrado = float(ventas_por_metodo.get('efectivo', 0)) - float(gastos_por_metodo.get('efectivo', 0))
+            # Diferencia entre efectivo declarado y efectivo esperado
             diferencias = {
-                'efectivo': declarado['efectivo'] - efectivo_registrado,
+                'efectivo': declarado['efectivo'] - efectivo_esperado,
             }
             diferencia_cajas = declarado['cajas_contadas'] - cajas_vendidas
             explicacion_diferencias = closing.explicacion_diferencias
@@ -818,6 +827,11 @@ class ShiftDetailSerializer(serializers.ModelSerializer):
             'gastos_por_metodo': gastos_por_metodo,
             'total_gastos': total_gastos,
             'neto_por_metodo': neto_por_metodo,
+            'efectivo_ventas': efectivo_ventas,
+            'gastos_efectivo': gastos_efectivo,
+            'efectivo_neto': efectivo_neto,
+            'saldo_inicial': saldo_inicial,
+            'efectivo_esperado': efectivo_esperado,
             'cajas_vendidas': cajas_vendidas,
             'declarado': declarado,
             'diferencias': diferencias,

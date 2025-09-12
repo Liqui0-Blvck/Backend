@@ -228,8 +228,8 @@ class FruitLotViewSet(RolePermissionMixin, viewsets.ModelViewSet):
     def sold_pallets(self, request):
         """Retorna una lista de pallets vendidos o con estado agotado"""
         try:
-            # Filtrar pallets vendidos o agotados
-            queryset = FruitLot.objects.filter(estado_lote='agotado')
+            # Filtrar pallets vendidos o agotados basándose únicamente en cajas, no en kilos disponibles
+            queryset = FruitLot.objects.filter(cantidad_cajas=0)
             
             # Aplicar filtros adicionales si se proporcionan
             producto_id = request.query_params.get('producto_id')
@@ -276,10 +276,10 @@ class FruitLotViewSet(RolePermissionMixin, viewsets.ModelViewSet):
             except FruitLot.DoesNotExist:
                 return Response({'error': f'No existe un pallet con el ID: {uid}'}, status=status.HTTP_404_NOT_FOUND)
             
-            # Verificar que el lote esté agotado
-            if lote.estado_lote != 'agotado':
+            # Verificar que el lote no tenga cajas disponibles (basado solo en cajas, no en kilos)
+            if lote.cantidad_cajas > 0:
                 return Response(
-                    {'error': 'Este pallet no está agotado o vendido'}, 
+                    {'error': 'Este pallet todavía tiene cajas disponibles'}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
             

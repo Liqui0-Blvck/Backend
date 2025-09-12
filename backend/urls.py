@@ -41,8 +41,8 @@ urlpatterns = [
     path('api/v1/notifications/', include(notifications_urls)),
     
     # Agregar rutas adicionales para supplier-payments y concession-settlements
-    path('api/supplier-payments/', include('inventory.urls_payments')),
-    path('api/concession-settlements/', include('inventory.urls_settlements')),
+    path('api/v1/inventory/supplier-payments/', include('inventory.urls_payments')),
+    path('api/v1/inventory/concession-settlements/', include('inventory.urls_settlements')),
     
     path('api/v1/dashboard/', DashboardView.as_view(), name='dashboard'),
 
