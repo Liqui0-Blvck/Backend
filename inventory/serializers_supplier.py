@@ -243,7 +243,6 @@ class SupplierSerializer(serializers.ModelSerializer):
             for detalle in recepcion.detalles.all():
                 detalles.append({
                     'uid': detalle.uid,
-                    'numero_pallet': detalle.numero_pallet,
                     'producto': detalle.producto.nombre if detalle.producto else 'No especificado',
                     'calibre': detalle.calibre or 'No especificado',
                     'cantidad_cajas': detalle.cantidad_cajas,

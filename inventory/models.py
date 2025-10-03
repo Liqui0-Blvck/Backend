@@ -421,7 +421,7 @@ class ReceptionDetail(BaseModel):
     box_type = models.ForeignKey('BoxType', on_delete=models.PROTECT, blank=True, null=True)
     
     # Cantidades
-    numero_pallet = models.CharField(max_length=20, help_text="Identificador único del pallet/lote")
+    numero_pallet = models.CharField(max_length=20, help_text="Identificador del pallet/lote (opcional)", blank=True, null=True)
     cantidad_cajas = models.PositiveIntegerField()
     peso_bruto = models.DecimalField(max_digits=8, decimal_places=2, help_text="Peso bruto en kg")
     peso_tara = models.DecimalField(max_digits=8, decimal_places=2, default=0, help_text="Peso de embalaje/tara en kg")
@@ -457,7 +457,8 @@ class ReceptionDetail(BaseModel):
     
     
     def __str__(self):
-        return f"Pallet {self.numero_pallet} - {self.producto.nombre} ({self.cantidad_cajas} cajas, {self.peso_bruto}kg)"
+        numero = self.numero_pallet or 's/numero'
+        return f"Pallet {numero} - {self.producto.nombre} ({self.cantidad_cajas} cajas, {self.peso_bruto}kg)"
     
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
@@ -467,7 +468,6 @@ class ReceptionDetail(BaseModel):
     class Meta:
         verbose_name = _("Reception Detail")
         verbose_name_plural = _("Reception Details")
-        unique_together = ('recepcion', 'numero_pallet')
 
 class ReceptionImage(BaseModel):
     """

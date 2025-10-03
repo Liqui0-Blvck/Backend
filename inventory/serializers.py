@@ -980,7 +980,7 @@ class ReceptionDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = ReceptionDetail
         fields = (
-            'uid', 'recepcion', 'producto', 'producto_nombre', 'variedad', 'calibre', 'box_type', 'numero_pallet', 'cantidad_cajas', 'peso_bruto',
+            'uid', 'recepcion', 'producto', 'producto_nombre', 'variedad', 'calibre', 'box_type', 'cantidad_cajas', 'peso_bruto',
             'peso_tara', 'calidad', 'temperatura', 'estado_maduracion',
             'costo', 'porcentaje_perdida_estimado',
             'precio_sugerido_min', 'precio_sugerido_max',
@@ -1050,7 +1050,6 @@ class GoodsReceptionSerializer(serializers.ModelSerializer):
             detalles.append({
                 # Identificación
                 'uid': d.uid,
-                'numero_pallet': d.numero_pallet,
                 # Producto y BoxType (uids y nombres para selects)
                 'producto': d.producto.uid if d.producto else None,
                 'producto_nombre': d.producto.nombre if d.producto else None,
