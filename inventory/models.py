@@ -421,7 +421,7 @@ class ReceptionDetail(BaseModel):
     box_type = models.ForeignKey('BoxType', on_delete=models.PROTECT, blank=True, null=True)
     
     # Cantidades
-    numero_pallet = models.CharField(max_length=20, help_text="Identificador único del pallet/lote")
+    numero_pallet = models.CharField(max_length=20, blank=True, null=True, help_text="Identificador opcional del pallet/lote")
     cantidad_cajas = models.PositiveIntegerField()
     peso_bruto = models.DecimalField(max_digits=8, decimal_places=2, help_text="Peso bruto en kg")
     peso_tara = models.DecimalField(max_digits=8, decimal_places=2, default=0, help_text="Peso de embalaje/tara en kg")
