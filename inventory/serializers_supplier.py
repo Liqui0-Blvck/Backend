@@ -107,6 +107,10 @@ class SupplierSerializer(serializers.ModelSerializer):
     vinculado = serializers.SerializerMethodField()
     # Bins del proveedor
     detalle_bins = serializers.SerializerMethodField()
+    # Deuda por bins con pago pendiente
+    bins_pendientes_pago_count = serializers.SerializerMethodField()
+    bins_pendientes_pago_kg = serializers.SerializerMethodField()
+    deuda_bins = serializers.SerializerMethodField()
 
     # Nuevos KPIs de ventas
     ventas_por_recepcion = serializers.SerializerMethodField()
@@ -121,7 +125,8 @@ class SupplierSerializer(serializers.ModelSerializer):
                  'cantidad_recepciones', 'cantidad_liquidaciones', 'cantidad_pallets', 'cantidad_cajas',
                  'total_kg_recepcionados', 'ultima_recepcion', 'ultima_liquidacion', 'ultimo_pago',
                  'detalle_pallets', 'detalle_pallets_desde_bins', 'detalle_bins', 'resumen_pagos', 'resumen_liquidaciones', 'vinculado',
-                 'ventas_por_recepcion', 'ventas_totales', 'ventas_desde_transformados')
+                 'ventas_por_recepcion', 'ventas_totales', 'ventas_desde_transformados',
+                 'bins_pendientes_pago_count', 'bins_pendientes_pago_kg', 'deuda_bins')
     
     def get_total_deuda(self, obj):
         """Calcula la deuda total pendiente del proveedor"""
@@ -305,6 +310,42 @@ class SupplierSerializer(serializers.ModelSerializer):
             return serializer.data
         except Exception:
             return []
+
+    def get_bins_pendientes_pago_count(self, obj):
+        try:
+            return FruitBin.objects.filter(proveedor=obj, pago_pendiente=True).count()
+        except Exception:
+            return 0
+
+    def get_bins_pendientes_pago_kg(self, obj):
+        try:
+            qs = FruitBin.objects.filter(proveedor=obj, pago_pendiente=True)
+            total = 0.0
+            for b in qs:
+                total += float(b.peso_neto or 0)
+            return total
+        except Exception:
+            return 0.0
+
+    def get_deuda_bins(self, obj):
+        """Suma de deuda por bins con pago_pendiente=True.
+        Regla: usa costo_total si existe; si no, costo_por_kilo * peso_neto; si no, 0.
+        """
+        try:
+            from decimal import Decimal as D
+            qs = FruitBin.objects.filter(proveedor=obj, pago_pendiente=True)
+            total = D('0')
+            for b in qs:
+                try:
+                    if b.costo_total is not None:
+                        total += D(str(b.costo_total))
+                    elif b.costo_por_kilo is not None and b.peso_neto is not None:
+                        total += D(str(b.costo_por_kilo)) * D(str(b.peso_neto))
+                except Exception:
+                    continue
+            return float(total)
+        except Exception:
+            return 0.0
 
     def _aggregate_ventas_qs(self, saleitems_qs):
         """Helper: agrega métricas de ventas para un queryset de SaleItem."""

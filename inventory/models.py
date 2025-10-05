@@ -766,6 +766,18 @@ class FruitBin(BaseModel):
                                             related_name='bins_en_concesion',
                                             null=True, blank=True,
                                             help_text="Proveedor propietario original del bin en concesión")
+    # Configuración de comisión (persistencia de la forma enviada por el cliente)
+    COMISION_BASE_CHOICES = [
+        ('kg', 'Por kilo'),
+        ('caja', 'Por caja'),
+        ('unidad', 'Por unidad'),
+        ('venta', 'Por venta'),
+    ]
+    comision_base = models.CharField(max_length=12, choices=COMISION_BASE_CHOICES, null=True, blank=True)
+    comision_porcentaje = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    comision_monto = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    # Estado de pago al proveedor para este bin (independiente de recepciones)
+    pago_pendiente = models.BooleanField(default=False, help_text="Indica si el pago al proveedor por este bin está pendiente")
     
     def save(self, *args, **kwargs):
         """Mantiene peso_neto sincronizado con peso_bruto y peso_tara."""

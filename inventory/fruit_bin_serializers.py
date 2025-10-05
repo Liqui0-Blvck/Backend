@@ -18,6 +18,7 @@ class FruitBinListSerializer(serializers.ModelSerializer):
     peso_neto = serializers.SerializerMethodField()
     estado_display = serializers.CharField(source='get_estado_display', read_only=True)
     calidad_display = serializers.CharField(source='get_calidad_display', read_only=True)
+    pago_pendiente = serializers.BooleanField(source='pago_pendiente', read_only=True)
     
     class Meta:
         model = FruitBin
@@ -25,9 +26,9 @@ class FruitBinListSerializer(serializers.ModelSerializer):
             'uid', 'codigo', 'producto', 'producto_nombre', 'producto_tipo', 'variedad',
             'peso_bruto', 'peso_tara', 'peso_neto', 'costo_por_kilo', 'costo_total', 'estado', 'estado_display',
             'calidad', 'calidad_display', 'proveedor', 'proveedor_nombre', 
-            'en_concesion', 'comision_por_kilo', 'fecha_limite_concesion',
+            'en_concesion', 'comision_por_kilo', 'comision_base', 'comision_porcentaje', 'comision_monto', 'fecha_limite_concesion',
             'propietario_original', 'propietario_original_nombre',
-            'recepcion', 'fecha_recepcion'
+            'recepcion', 'pago_pendiente', 'fecha_recepcion'
         ]
     
     def get_peso_neto(self, obj):
@@ -53,6 +54,8 @@ class FruitBinDetailSerializer(serializers.ModelSerializer):
     transformaciones = serializers.SerializerMethodField()
     vendido = serializers.SerializerMethodField()
     venta = serializers.SerializerMethodField()
+    pago_pendiente = serializers.SerializerMethodField()
+    estado_pago_recepcion = serializers.CharField(source='recepcion.estado_pago', read_only=True)
     
     class Meta:
         model = FruitBin
@@ -61,9 +64,9 @@ class FruitBinDetailSerializer(serializers.ModelSerializer):
             'peso_bruto', 'peso_tara', 'peso_neto', 'costo_por_kilo', 'costo_total', 'estado', 'estado_display',
             'calidad', 'calidad_display', 'ubicacion', 'recepcion', 'recepcion_uid', 'recepcion_info', 'fecha_recepcion',
             'proveedor', 'proveedor_uid', 'proveedor_nombre', 'proveedor_info',
-            'en_concesion', 'comision_por_kilo', 'fecha_limite_concesion',
+            'en_concesion', 'comision_por_kilo', 'comision_base', 'comision_porcentaje', 'comision_monto', 'fecha_limite_concesion',
             'propietario_original_uid', 'propietario_original_nombre',
-            'temperatura', 'observaciones',
+            'pago_pendiente', 'temperatura', 'observaciones',
             'created_at', 'updated_at', 'vendido', 'venta', 'transformaciones'
         ]
     
@@ -169,6 +172,14 @@ class FruitBinDetailSerializer(serializers.ModelSerializer):
             return data
         except Exception:
             return None
+    
+    def get_pago_pendiente(self, obj):
+        try:
+            if obj.recepcion and getattr(obj.recepcion, 'estado_pago', None):
+                return obj.recepcion.estado_pago == 'pendiente'
+        except Exception:
+            pass
+        return False
 
 
 class FruitBinBulkCreateSerializer(serializers.Serializer):
@@ -196,6 +207,8 @@ class FruitBinBulkCreateSerializer(serializers.Serializer):
     comision_base = serializers.CharField(required=False, allow_blank=True, help_text="Base de comisión: 'kg' | 'caja' | 'unidad' | 'venta'")
     comision_monto = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True, help_text='Monto directo de comisión según la base')
     comision_porcentaje = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, allow_null=True, help_text='Porcentaje de comisión (0-100)')
+    # Pago proveedor
+    pago_pendiente = serializers.BooleanField(required=False, default=False, help_text='Indica si el pago al proveedor de este bin está pendiente')
     
     def _normalize_calidad(self, valor):
         """Acepta enteros o strings y retorna una clave válida de FruitBin.CALIDAD_CHOICES.
@@ -289,6 +302,13 @@ class FruitBinBulkCreateSerializer(serializers.Serializer):
                 'recepcion': recepcion,
                 **validated_data
             }
+            # Persistir configuración de comisión tal como vino
+            bin_data['comision_base'] = comision_base
+            bin_data['comision_monto'] = comision_monto
+            bin_data['comision_porcentaje'] = comision_porcentaje
+            # Persistir estado de pago si vino
+            if 'pago_pendiente' in validated_data:
+                bin_data['pago_pendiente'] = validated_data['pago_pendiente']
             # Calcular costo_total si no viene y hay costo_por_kilo
             try:
                 if bin_data.get('costo_total') in (None, '') and bin_data.get('costo_por_kilo') not in (None, ''):

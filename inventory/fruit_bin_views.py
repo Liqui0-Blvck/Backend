@@ -183,6 +183,55 @@ class FruitBinViewSet(viewsets.ModelViewSet):
             return FruitBinDetailSerializer
         return FruitBinListSerializer
 
+    @action(detail=True, methods=['patch'], url_path='ubicacion')
+    def actualizar_ubicacion(self, request, uid=None):
+        """Actualiza la ubicacion de un bin específico.
+        Endpoint: PATCH /api/v1/fruit-bins/{uid}/ubicacion/
+        Body: { "ubicacion": "BODEGA|PACKING|OTRO" }
+        """
+        bin_obj = self.get_object()
+        nueva_ubicacion = request.data.get('ubicacion')
+        if not nueva_ubicacion:
+            raise ValidationError({'ubicacion': 'Campo requerido'})
+        # Validar contra choices
+        valid_values = [c[0] for c in FruitBin.UBICACION_CHOICES]
+        if nueva_ubicacion not in valid_values:
+            raise ValidationError({'ubicacion': f"Valor inválido. Opciones: {', '.join(valid_values)}"})
+        bin_obj.ubicacion = nueva_ubicacion
+        bin_obj.save(update_fields=['ubicacion', 'updated_at'])
+        return Response(FruitBinDetailSerializer(bin_obj, context={'request': request}).data)
+
+    @action(detail=False, methods=['post'], url_path='ubicacion-bulk')
+    def actualizar_ubicacion_bulk(self, request):
+        """Actualiza la ubicacion de múltiples bins del negocio actual.
+        Endpoint: POST /api/v1/fruit-bins/ubicacion-bulk/
+        Body: { "bins": ["uid1","uid2",...], "ubicacion": "BODEGA|PACKING|OTRO" }
+        """
+        uids = request.data.get('bins') or []
+        nueva_ubicacion = request.data.get('ubicacion')
+        if not uids or not isinstance(uids, list):
+            raise ValidationError({'bins': 'Debes enviar una lista de UIDs'})
+        if not nueva_ubicacion:
+            raise ValidationError({'ubicacion': 'Campo requerido'})
+        valid_values = [c[0] for c in FruitBin.UBICACION_CHOICES]
+        if nueva_ubicacion not in valid_values:
+            raise ValidationError({'ubicacion': f"Valor inválido. Opciones: {', '.join(valid_values)}"})
+
+        # Restringir por business del usuario
+        queryset = self.get_queryset().filter(uid__in=uids)
+        actualizados = []
+        for b in queryset:
+            b.ubicacion = nueva_ubicacion
+            b.save(update_fields=['ubicacion', 'updated_at'])
+            actualizados.append(b)
+
+        data = FruitBinListSerializer(actualizados, many=True, context={'request': request}).data
+        return Response({
+            'cantidad_actualizada': len(actualizados),
+            'ubicacion': nueva_ubicacion,
+            'bins': data,
+        })
+
 
 
 class FruitBinBulkCreateView(APIView):
