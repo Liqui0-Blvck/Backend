@@ -25,7 +25,7 @@ services:
   api:
     container_name: backend-api-1
     build: .
-    command: ["/app/docker-entrypoint.sh", "daphne", "-b", "0.0.0.0", "-p", "8000", "backend.asgi:application"]
+    command: ["daphne", "-b", "0.0.0.0", "-p", "8000", "backend.asgi:application"]
     volumes:
       - .:/app
     expose:
