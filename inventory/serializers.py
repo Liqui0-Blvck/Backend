@@ -987,6 +987,9 @@ class ReceptionDetailSerializer(serializers.ModelSerializer):
             # Campos de concesión / comisión
             'en_concesion', 'comision_por_kilo', 'fecha_limite_concesion'
         )
+        extra_kwargs = {
+            'numero_pallet': {'required': False, 'allow_null': True, 'allow_blank': True}
+        }
 
 class SupplierRelatedField(serializers.PrimaryKeyRelatedField):
     def to_internal_value(self, data):
