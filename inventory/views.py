@@ -508,28 +508,26 @@ class GoodsReceptionViewSet(RolePermissionMixin, viewsets.ModelViewSet):
                     detalle['en_concesion'] = en_concesion
                     detalle['fecha_limite_concesion'] = fecha_limite_concesion
 
-                    # Upsert por (recepcion, numero_pallet)
-                    numero_pallet = detalle.get('numero_pallet')
-                    if not numero_pallet:
-                        errores_detalles.append({"detalle": i, "error": "Campo 'numero_pallet' es obligatorio"})
-                        continue
-                    existente = ReceptionDetail.objects.filter(recepcion=recepcion, numero_pallet=numero_pallet).first()
-                    if existente:
-                        detalle_serializer = ReceptionDetailSerializer(existente, data=detalle, partial=True)
-                        if detalle_serializer.is_valid():
-                            detalle_serializer.save()
-                            detalles_creados.append(detalle_serializer.data)
-                        else:
-                            print(f"Errores de validación (update): {detalle_serializer.errors}")
-                            errores_detalles.append({"detalle": i, "error": detalle_serializer.errors})
+                    # Actualizar por uid si viene, si no crear
+                    detalle_uid = detalle.get('uid')
+                    if detalle_uid:
+                        existente = ReceptionDetail.objects.filter(uid=detalle_uid, recepcion=recepcion).first()
+                        if existente:
+                            detalle_serializer = ReceptionDetailSerializer(existente, data=detalle, partial=True)
+                            if detalle_serializer.is_valid():
+                                detalle_serializer.save()
+                                detalles_creados.append(detalle_serializer.data)
+                            else:
+                                print(f"Errores de validación (update): {detalle_serializer.errors}")
+                                errores_detalles.append({"detalle": i, "error": detalle_serializer.errors})
+                            continue
+                    detalle_serializer = ReceptionDetailSerializer(data=detalle)
+                    if detalle_serializer.is_valid():
+                        detalle_serializer.save()
+                        detalles_creados.append(detalle_serializer.data)
                     else:
-                        detalle_serializer = ReceptionDetailSerializer(data=detalle)
-                        if detalle_serializer.is_valid():
-                            detalle_serializer.save()
-                            detalles_creados.append(detalle_serializer.data)
-                        else:
-                            print(f"Errores de validación (create): {detalle_serializer.errors}")
-                            errores_detalles.append({"detalle": i, "error": detalle_serializer.errors})
+                        print(f"Errores de validación (create): {detalle_serializer.errors}")
+                        errores_detalles.append({"detalle": i, "error": detalle_serializer.errors})
                 except Exception as e:
                     print(f"Error al procesar detalle {i}: {str(e)}")
                     errores_detalles.append({"detalle": i, "error": str(e)})
@@ -747,7 +745,7 @@ class ReceptionDetailViewSet(RolePermissionMixin, viewsets.ModelViewSet):
                             'error': 'Detalle no encontrado'
                         })
                 else:
-                    # Crear nuevo detalle o actualizar si ya existe por (recepcion, numero_pallet)
+                    # Crear nuevo detalle o actualizar si ya existe por uid
                     # Validar campos obligatorios
                     if 'producto' not in detalle_data:
                         errores.append({
@@ -756,16 +754,9 @@ class ReceptionDetailViewSet(RolePermissionMixin, viewsets.ModelViewSet):
                             'error': "El campo 'producto' es obligatorio."
                         })
                         continue
-                    # Upsert por (recepcion, numero_pallet)
-                    numero_pallet = detalle_data.get('numero_pallet')
-                    if not numero_pallet:
-                        errores.append({
-                            'indice': i,
-                            'detalle': detalle_data,
-                            'error': "El campo 'numero_pallet' es obligatorio."
-                        })
-                        continue
-                    existente = ReceptionDetail.objects.filter(recepcion=recepcion, numero_pallet=numero_pallet).first()
+                    # Upsert por uid si se entrega
+                    detalle_uid = detalle_data.get('uid')
+                    existente = ReceptionDetail.objects.filter(uid=detalle_uid, recepcion=recepcion).first() if detalle_uid else None
                     if existente:
                         serializer = self.get_serializer(existente, data=detalle_data, partial=True)
                         if serializer.is_valid(raise_exception=False):

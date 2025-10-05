@@ -74,6 +74,18 @@ class FruitLot(BaseModel):
     uid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
     producto = models.ForeignKey('Product', on_delete=models.CASCADE, null=True, blank=True)
     marca = models.CharField(max_length=50, blank=True)
+    # Calibraje/calidad (5ta a Super Extra)
+    CALIDAD_CALIBRAJE_CHOICES = [
+        ('DESCARTE', 'Descarte'),
+        ('5TA', '5ta'),
+        ('4TA', '4ta'),
+        ('3RA', '3ra'),
+        ('2DA', '2da'),
+        ('1RA', '1ra'),
+        ('EXTRA', 'Extra'),
+        ('SUPER_EXTRA', 'Super Extra'),
+    ]
+    calidad = models.CharField(max_length=16, choices=CALIDAD_CALIBRAJE_CHOICES, default='3RA', help_text="Calibraje/calidad del lote")
     variedad = models.CharField(max_length=50, blank=True, null=True)
     proveedor = models.ForeignKey('Supplier', on_delete=models.CASCADE, null=True, blank=True)
     procedencia = models.CharField(max_length=64)
@@ -416,12 +428,12 @@ class ReceptionDetail(BaseModel):
     
     # Información del producto
     producto = models.ForeignKey('Product', on_delete=models.PROTECT)
+    marca = models.CharField(max_length=50, blank=True, null=True)
     variedad = models.CharField(max_length=50, blank=True, null=True)
     calibre = models.CharField(max_length=20, blank=True, null=True)
     box_type = models.ForeignKey('BoxType', on_delete=models.PROTECT, blank=True, null=True)
     
     # Cantidades
-    numero_pallet = models.CharField(max_length=20, help_text="Identificador único del pallet/lote")
     cantidad_cajas = models.PositiveIntegerField()
     peso_bruto = models.DecimalField(max_digits=8, decimal_places=2, help_text="Peso bruto en kg")
     peso_tara = models.DecimalField(max_digits=8, decimal_places=2, default=0, help_text="Peso de embalaje/tara en kg")
@@ -457,8 +469,8 @@ class ReceptionDetail(BaseModel):
     
     
     def __str__(self):
-        numero = self.numero_pallet or 's/numero'
-        return f"Pallet {numero} - {self.producto.nombre} ({self.cantidad_cajas} cajas, {self.peso_bruto}kg)"
+        producto = self.producto.nombre if self.producto else 'Producto'
+        return f"Pallet - {producto} ({self.cantidad_cajas} cajas, {self.peso_bruto}kg)"
     
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
@@ -482,7 +494,7 @@ class ReceptionImage(BaseModel):
     def __str__(self):
         base = f"Imagen {self.id} - {self.recepcion.numero_guia}"
         if self.detalle:
-            return f"{base} - Pallet {self.detalle.numero_pallet}"
+            return f"{base} - Detalle {self.detalle.uid}"
         return base
     
     class Meta:
@@ -521,8 +533,8 @@ def crear_lotes_al_aprobar_recepcion(sender, instance, created, **kwargs):
                         # Crear un nuevo lote de fruta basado en el detalle de recepción
                         lote = FruitLot(
                             producto=detalle.producto,
-                            # El tipo_producto es un atributo del producto, no del lote
-                            marca=(detalle.producto.marca if getattr(detalle, 'producto', None) and getattr(detalle.producto, 'marca', None) else ""),
+                            # Preferir la marca del detalle si viene, si no usar la del producto
+                            marca=(detalle.marca or (detalle.producto.marca if getattr(detalle, 'producto', None) and getattr(detalle.producto, 'marca', None) else "")),
                             variedad=detalle.variedad or "",
                             proveedor=instance.proveedor if instance.proveedor else None,
                             procedencia=instance.proveedor.direccion if instance.proveedor and instance.proveedor.direccion else "No especificada",
@@ -592,6 +604,9 @@ def actualizar_lote_desde_detalle(sender, instance, created, **kwargs):
         # Sincronizar variedad desde el detalle si existe
         if getattr(instance, 'variedad', None) is not None:
             lote.variedad = instance.variedad
+        # Sincronizar marca si viene en el detalle
+        if getattr(instance, 'marca', None) is not None:
+            lote.marca = instance.marca or (lote.marca or "")
         
         # Actualizar campos de precios sugeridos
         if instance.precio_sugerido_min is not None:
@@ -747,6 +762,10 @@ class FruitBin(BaseModel):
                                             help_text="Comisión por kilo para bin en concesión")
     fecha_limite_concesion = models.DateField(null=True, blank=True,
                                               help_text="Fecha límite para vender el bin en concesión")
+    propietario_original = models.ForeignKey('Supplier', on_delete=models.PROTECT,
+                                            related_name='bins_en_concesion',
+                                            null=True, blank=True,
+                                            help_text="Proveedor propietario original del bin en concesión")
     
     def save(self, *args, **kwargs):
         """Mantiene peso_neto sincronizado con peso_bruto y peso_tara."""
@@ -790,7 +809,18 @@ class FruitBin(BaseModel):
         ('DESCARTADO', 'Descartado'),
     ]
     estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default='DISPONIBLE')
-    calidad = models.IntegerField(choices=ReceptionDetail.CALIDAD_CHOICES, default=3)
+    # Usar el mismo esquema de calibraje que FruitLot
+    CALIDAD_CHOICES = [
+        ('DESCARTE', 'Descarte'),
+        ('5TA', '5ta'),
+        ('4TA', '4ta'),
+        ('3RA', '3ra'),
+        ('2DA', '2da'),
+        ('1RA', '1ra'),
+        ('EXTRA', 'Extra'),
+        ('SUPER_EXTRA', 'Super Extra'),
+    ]
+    calidad = models.CharField(max_length=16, choices=CALIDAD_CHOICES, default='3RA')
     
     # Ubicación/locación del bin
     UBICACION_CHOICES = [

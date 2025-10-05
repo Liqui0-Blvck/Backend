@@ -24,7 +24,7 @@ class FruitBinFilter(FilterSet):
     peso_neto_max = NumberFilter(method='filter_peso_neto_max', label='Peso neto máximo')
     estado = CharFilter(method='filter_estado', label='Estados')
     producto = CharFilter(method='filter_producto', label='Producto (ID o nombre)')
-    calidad = NumberFilter(field_name='calidad', label='Calidad (1-5)')
+    calidad = CharFilter(method='filter_calidad', label='Calidad/calibraje (5TA,4TA,3RA,2DA,1RA,EXTRA,SUPER_EXTRA)')
     
     def filter_peso_neto_min(self, queryset, name, value):
         """Filtra bins con peso neto mayor o igual al valor especificado"""
@@ -35,6 +35,23 @@ class FruitBinFilter(FilterSet):
                     filtered_bins.append(bin.pk)
             return queryset.filter(pk__in=filtered_bins)
         return queryset
+
+    def filter_calidad(self, queryset, name, value):
+        """Permite filtrar por múltiples calidades/calibrajes.
+        Acepta:
+        - Repetido: ?calidad=3RA&calidad=EXTRA
+        - Comas: ?calidad=3RA,EXTRA
+        - Arreglo: ?calidad[]=3RA&calidad[]=EXTRA
+        """
+        request = getattr(self, 'request', None)
+        valores = []
+        if request:
+            valores = request.GET.getlist('calidad') or request.GET.getlist('calidad[]')
+        if not valores and value:
+            valores = [v.strip() for v in str(value).split(',') if v.strip()]
+        if not valores:
+            return queryset
+        return queryset.filter(calidad__in=valores)
     
     def filter_peso_neto_max(self, queryset, name, value):
         """Filtra bins con peso neto menor o igual al valor especificado"""

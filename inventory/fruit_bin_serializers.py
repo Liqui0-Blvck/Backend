@@ -12,6 +12,8 @@ class FruitBinListSerializer(serializers.ModelSerializer):
     producto = serializers.UUIDField(source='producto.uid', read_only=True)
     proveedor_nombre = serializers.CharField(source='proveedor.nombre', read_only=True)
     proveedor = serializers.UUIDField(source='proveedor.uid', read_only=True)
+    propietario_original = serializers.UUIDField(source='propietario_original.uid', read_only=True, allow_null=True)
+    propietario_original_nombre = serializers.CharField(source='propietario_original.nombre', read_only=True, allow_null=True)
     recepcion = serializers.UUIDField(source='recepcion.uid', read_only=True, allow_null=True)
     peso_neto = serializers.SerializerMethodField()
     estado_display = serializers.CharField(source='get_estado_display', read_only=True)
@@ -21,8 +23,10 @@ class FruitBinListSerializer(serializers.ModelSerializer):
         model = FruitBin
         fields = [
             'uid', 'codigo', 'producto', 'producto_nombre', 'producto_tipo', 'variedad',
-            'peso_bruto', 'peso_tara', 'peso_neto', 'estado', 'estado_display',
+            'peso_bruto', 'peso_tara', 'peso_neto', 'costo_por_kilo', 'costo_total', 'estado', 'estado_display',
             'calidad', 'calidad_display', 'proveedor', 'proveedor_nombre', 
+            'en_concesion', 'comision_por_kilo', 'fecha_limite_concesion',
+            'propietario_original', 'propietario_original_nombre',
             'recepcion', 'fecha_recepcion'
         ]
     
@@ -40,6 +44,8 @@ class FruitBinDetailSerializer(serializers.ModelSerializer):
     proveedor_uid = serializers.UUIDField(source='proveedor.uid', read_only=True, allow_null=True)
     proveedor_info = serializers.SerializerMethodField()
     recepcion_uid = serializers.UUIDField(source='recepcion.uid', read_only=True, allow_null=True)
+    propietario_original_uid = serializers.UUIDField(source='propietario_original.uid', read_only=True, allow_null=True)
+    propietario_original_nombre = serializers.CharField(source='propietario_original.nombre', read_only=True, allow_null=True)
     peso_neto = serializers.SerializerMethodField()
     estado_display = serializers.CharField(source='get_estado_display', read_only=True)
     calidad_display = serializers.CharField(source='get_calidad_display', read_only=True)
@@ -52,9 +58,12 @@ class FruitBinDetailSerializer(serializers.ModelSerializer):
         model = FruitBin
         fields = [
             'uid', 'codigo', 'producto', 'producto_uid', 'producto_nombre', 'producto_tipo', 'producto_info', 'variedad',
-            'peso_bruto', 'peso_tara', 'peso_neto', 'estado', 'estado_display',
+            'peso_bruto', 'peso_tara', 'peso_neto', 'costo_por_kilo', 'costo_total', 'estado', 'estado_display',
             'calidad', 'calidad_display', 'ubicacion', 'recepcion', 'recepcion_uid', 'recepcion_info', 'fecha_recepcion',
-            'proveedor', 'proveedor_uid', 'proveedor_nombre', 'proveedor_info', 'temperatura', 'observaciones',
+            'proveedor', 'proveedor_uid', 'proveedor_nombre', 'proveedor_info',
+            'en_concesion', 'comision_por_kilo', 'fecha_limite_concesion',
+            'propietario_original_uid', 'propietario_original_nombre',
+            'temperatura', 'observaciones',
             'created_at', 'updated_at', 'vendido', 'venta', 'transformaciones'
         ]
     
@@ -169,18 +178,79 @@ class FruitBinBulkCreateSerializer(serializers.Serializer):
     variedad = serializers.CharField(required=False, allow_blank=True, help_text='Variedad de la fruta')
     peso_bruto = serializers.DecimalField(max_digits=10, decimal_places=2, required=True, help_text='Peso bruto en kg')
     peso_tara = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, help_text='Peso de la tara en kg')
+    costo_por_kilo = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True, help_text='Costo por kilo del bin')
+    costo_total = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True, help_text='Costo total del bin')
     estado = serializers.ChoiceField(choices=FruitBin.ESTADO_CHOICES, default='DISPONIBLE', help_text='Estado del bin')
-    calidad = serializers.ChoiceField(choices=ReceptionDetail.CALIDAD_CHOICES, default=3, help_text='Calidad de la fruta')
+    calidad = serializers.ChoiceField(choices=FruitBin.CALIDAD_CHOICES, default='3RA', help_text='Calibraje/calidad del bin')
     proveedor = serializers.UUIDField(required=False, allow_null=True, help_text='ID del proveedor')
     recepcion = serializers.UUIDField(required=False, allow_null=True, help_text='ID de la recepción')
     fecha_recepcion = serializers.DateField(required=False, help_text='Fecha de recepción')
     temperatura = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, allow_null=True, help_text='Temperatura de la fruta')
     observaciones = serializers.CharField(required=False, allow_blank=True, help_text='Observaciones adicionales')
+    # Concesión
+    en_concesion = serializers.BooleanField(required=False, default=False, help_text='Indica si el bin está en concesión')
+    comision_por_kilo = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True, help_text='Comisión por kilo para bin en concesión')
+    fecha_limite_concesion = serializers.DateField(required=False, allow_null=True, help_text='Fecha límite para vender el bin en concesión')
+    propietario_original = serializers.UUIDField(required=False, allow_null=True, help_text='UID del proveedor propietario original')
+    # Entrada flexible de comisión (como GoodsReception)
+    comision_base = serializers.CharField(required=False, allow_blank=True, help_text="Base de comisión: 'kg' | 'caja' | 'unidad' | 'venta'")
+    comision_monto = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True, help_text='Monto directo de comisión según la base')
+    comision_porcentaje = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, allow_null=True, help_text='Porcentaje de comisión (0-100)')
     
+    def _normalize_calidad(self, valor):
+        """Acepta enteros o strings y retorna una clave válida de FruitBin.CALIDAD_CHOICES.
+        Mapeo propuesto:
+        0/"DESCARTE" -> 'DESCARTE'
+        1 -> '5TA', 2 -> '4TA', 3 -> '3RA', 4 -> '2DA', 5 -> '1RA', 6 -> 'EXTRA', 7 -> 'SUPER_EXTRA'
+        Si ya viene una clave válida, se respeta.
+        """
+        if valor is None:
+            return '3RA'
+        # Si viene como número o string de número
+        try:
+            num = int(valor)
+            if num <= 0:
+                return 'DESCARTE'
+            mapa = {
+                1: '5TA',
+                2: '4TA',
+                3: '3RA',
+                4: '2DA',
+                5: '1RA',
+                6: 'EXTRA',
+                7: 'SUPER_EXTRA',
+            }
+            return mapa.get(num, '3RA')
+        except (ValueError, TypeError):
+            pass
+        # Strings
+        s = str(valor).strip().upper()
+        # Normalizar nombres comunes
+        alias = {
+            'DESCARTE': 'DESCARTE',
+            'DESCARTADO': 'DESCARTE',
+            '5TA': '5TA', 'QUINTA': '5TA',
+            '4TA': '4TA', 'CUARTA': '4TA',
+            '3RA': '3RA', 'TERCERA': '3RA',
+            '2DA': '2DA', 'SEGUNDA': '2DA',
+            '1RA': '1RA', 'PRIMERA': '1RA',
+            'EXTRA': 'EXTRA',
+            'SUPER EXTRA': 'SUPER_EXTRA', 'SUPER_EXTRA': 'SUPER_EXTRA',
+        }
+        return alias.get(s, '3RA')
+
     def create(self, validated_data):
         """Crea múltiples bins con los mismos datos"""
         cantidad = validated_data.pop('cantidad')
         business = validated_data.pop('business', None)
+        # Extraer inputs flexibles de comisión
+        en_concesion = validated_data.get('en_concesion', False)
+        comision_base = validated_data.pop('comision_base', None)
+        comision_monto = validated_data.pop('comision_monto', None)
+        comision_porcentaje = validated_data.pop('comision_porcentaje', None)
+        # Normalizar calidad (acepta numérico o string)
+        if 'calidad' in validated_data:
+            validated_data['calidad'] = self._normalize_calidad(validated_data.get('calidad'))
         
         # Convertir UUIDs a instancias de modelos
         producto_uuid = validated_data.pop('producto')
@@ -192,6 +262,12 @@ class FruitBinBulkCreateSerializer(serializers.Serializer):
             proveedor_uuid = validated_data.pop('proveedor')
             proveedor = get_object_or_404(Supplier, uid=proveedor_uuid)
         
+        # Manejar propietario_original (opcional)
+        propietario_original = None
+        if 'propietario_original' in validated_data and validated_data['propietario_original']:
+            propietario_uuid = validated_data.pop('propietario_original')
+            propietario_original = get_object_or_404(Supplier, uid=propietario_uuid)
+
         # Manejar la recepción (opcional)
         recepcion = None
         if 'recepcion' in validated_data and validated_data['recepcion']:
@@ -209,9 +285,32 @@ class FruitBinBulkCreateSerializer(serializers.Serializer):
                 'business': business,
                 'producto': producto,
                 'proveedor': proveedor,
+                'propietario_original': propietario_original,
                 'recepcion': recepcion,
                 **validated_data
             }
+            # Calcular costo_total si no viene y hay costo_por_kilo
+            try:
+                if bin_data.get('costo_total') in (None, '') and bin_data.get('costo_por_kilo') not in (None, ''):
+                    from decimal import Decimal as D
+                    peso_bruto = D(str(bin_data.get('peso_bruto') or 0))
+                    peso_tara = D(str(bin_data.get('peso_tara') or 0))
+                    peso_neto_est = max(peso_bruto - peso_tara, D('0'))
+                    bin_data['costo_total'] = (D(str(bin_data['costo_por_kilo'])) * peso_neto_est).quantize(D('0.01'))
+            except Exception:
+                pass
+            # Resolver comisión por kilo si corresponde (solo base 'kg')
+            try:
+                from decimal import Decimal as D
+                if en_concesion and (comision_base == 'kg'):
+                    if comision_monto not in (None, ''):
+                        bin_data['comision_por_kilo'] = D(str(comision_monto))
+                    elif comision_porcentaje not in (None, ''):
+                        costo_kg = bin_data.get('costo_por_kilo')
+                        if costo_kg not in (None, ''):
+                            bin_data['comision_por_kilo'] = D(str(costo_kg)) * D(str(comision_porcentaje)) / D('100')
+            except Exception:
+                pass
             
             bin_obj = FruitBin.objects.create(**bin_data)
             bins_creados.append(bin_obj)

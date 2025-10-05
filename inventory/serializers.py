@@ -169,7 +169,7 @@ class SupplierSerializer(serializers.ModelSerializer):
             for detalle in recepcion.detalles.all():
                 detalles.append({
                     'uid': detalle.uid,
-                    'numero_pallet': detalle.numero_pallet,
+                    'marca': getattr(detalle, 'marca', None),
                     'producto': detalle.producto.nombre if detalle.producto else 'No especificado',
                     'calibre': detalle.calibre or 'No especificado',
                     'cantidad_cajas': detalle.cantidad_cajas,
@@ -377,6 +377,7 @@ class FruitLotListSerializer(serializers.ModelSerializer):
     costo_total_pallet = serializers.SerializerMethodField()
     proveedor = serializers.CharField(source='proveedor.nombre', read_only=True)
     peso_reservado = serializers.SerializerMethodField()
+    calidad_display = serializers.CharField(source='get_calidad_display', read_only=True)
     # Peso del BoxType (explícito)
     box_type_peso_caja = serializers.SerializerMethodField()
     # Campos informativos (solo lectura)
@@ -388,7 +389,7 @@ class FruitLotListSerializer(serializers.ModelSerializer):
     class Meta:
         model = FruitLot
         fields = (
-            'uid', 'producto', 'producto_nombre', 'tipo_producto', 'calibre', 'variedad', 'codigo',
+            'uid', 'producto', 'producto_nombre', 'tipo_producto', 'calibre', 'variedad', 'marca', 'calidad', 'calidad_display', 'codigo',
             'peso_bruto', 'peso_neto', 'peso_reservado', 'cajas_disponibles','estado_maduracion', 'estado_lote', 'fecha_ingreso', 
             'procedencia', 'proveedor', 'costo_inicial', 'en_concesion', 'costo_total_pallet', 'proveedor',
             # Informativos
@@ -513,6 +514,7 @@ class FruitLotSerializer(serializers.ModelSerializer):
     dias_desde_ingreso = serializers.SerializerMethodField()
     dinero_generado = serializers.SerializerMethodField()
     porcentaje_vendido = serializers.SerializerMethodField()
+    calidad_display = serializers.CharField(source='get_calidad_display', read_only=True)
     propietario_original_nombre = serializers.SerializerMethodField()
     proveedor_nombre = serializers.SerializerMethodField()
     proveedor_uid = serializers.SerializerMethodField()
@@ -567,7 +569,7 @@ class FruitLotSerializer(serializers.ModelSerializer):
     class Meta:
         model = FruitLot
         fields = (
-            'uid', 'producto', 'marca', 'variedad', 'proveedor', 'procedencia', 'pais', 'calibre', 'box_type', 'pallet_type',
+            'uid', 'producto', 'marca', 'variedad', 'proveedor', 'procedencia', 'pais', 'calibre', 'calidad', 'calidad_display', 'box_type', 'pallet_type',
             'cantidad_cajas', 'peso_neto', 'cantidad_unidades', 'costo_inicial', 'fecha_ingreso',
             'estado_lote', 'estado_maduracion', 'en_concesion', 'comision_por_kilo', 'fecha_limite_concesion',
             'propietario_original', 
@@ -980,16 +982,13 @@ class ReceptionDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = ReceptionDetail
         fields = (
-            'uid', 'recepcion', 'producto', 'producto_nombre', 'variedad', 'calibre', 'box_type', 'cantidad_cajas', 'peso_bruto',
+            'uid', 'recepcion', 'producto', 'producto_nombre', 'marca', 'variedad', 'calibre', 'box_type', 'cantidad_cajas', 'peso_bruto',
             'peso_tara', 'calidad', 'temperatura', 'estado_maduracion',
             'costo', 'porcentaje_perdida_estimado',
             'precio_sugerido_min', 'precio_sugerido_max',
             # Campos de concesión / comisión
             'en_concesion', 'comision_por_kilo', 'fecha_limite_concesion'
         )
-        extra_kwargs = {
-            'numero_pallet': {'required': False, 'allow_null': True, 'allow_blank': True}
-        }
 
 class SupplierRelatedField(serializers.PrimaryKeyRelatedField):
     def to_internal_value(self, data):

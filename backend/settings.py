@@ -161,8 +161,9 @@ if IS_PRODUCTION:
     # CORS para producción
     CORS_ALLOWED_ORIGINS = os.environ.get('P_CORS_ALLOWED_ORIGINS', 'https://app.fruitpos.cl,https://www.app.fruitpos.cl').split(',')
     
-    # DigitalOcean Spaces Configuration para producción
-    USE_SPACES = os.environ.get('P_USE_SPACES', 'True').lower() == 'true'
+    # Almacenamiento en producción: por defecto LOCAL en el droplet (single-server)
+    # Se puede activar Spaces solo si P_USE_SPACES=true explícitamente
+    USE_SPACES = os.environ.get('P_USE_SPACES', 'False').lower() == 'true'
     
     if USE_SPACES:
         # Configuración de DigitalOcean Spaces (VALORES REALES DEL USUARIO)
@@ -218,7 +219,8 @@ if IS_PRODUCTION:
         DEFAULT_FILE_STORAGE = 'backend.storage_backends.MediaStorage'
         
     else:
-        # Fallback a almacenamiento local en producción
+        # Almacenamiento LOCAL en producción (estático y media en disco del droplet)
+        STATIC_URL = '/static/'
         STATIC_ROOT = os.environ.get('P_STATIC_ROOT', '/var/www/fruitpos/static')
         MEDIA_ROOT = os.environ.get('P_MEDIA_ROOT', '/var/www/fruitpos/media')
         MEDIA_URL = '/media/'
@@ -339,18 +341,4 @@ REST_FRAMEWORK = {
     ],
 }
 
-# Asegurar backends de almacenamiento en producción con Spaces (override final)
-try:
-    if IS_PRODUCTION and os.environ.get('P_USE_SPACES', 'True').lower() == 'true':
-        STORAGES = {
-            'default': {
-                'BACKEND': 'backend.storage_backends.MediaStorage',
-            },
-            'staticfiles': {
-                'BACKEND': 'backend.storage_backends.StaticStorage',
-            },
-        }
-        STATICFILES_STORAGE = 'backend.storage_backends.StaticStorage'
-        DEFAULT_FILE_STORAGE = 'backend.storage_backends.MediaStorage'
-except Exception:
-    pass
+# No forzar backends S3 aquí. Si USE_SPACES=True arriba, ya se configuró.
